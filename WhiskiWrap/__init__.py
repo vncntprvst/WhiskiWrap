@@ -33,9 +33,10 @@ with tables.open_file('traced_whiskers.hdf5') as fi:
     test_results = pandas.DataFrame.from_records(fi.root.summary.read()) 
 """
 
-import base
-import tests
+from . import base
+from . import tests
 #import video_utils
-import utils
-reload(base)
-from base import *
+from . import utils
+import importlib
+importlib.reload(base)
+from .base import *

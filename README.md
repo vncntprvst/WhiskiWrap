@@ -1,5 +1,5 @@
 # WhiskiWrap
-WhiskiWrap provides tools for running whiski (http://whiskertracking.janelia.org) more easily and efficiently. 
+WhiskiWrap provides tools for running whiski (http://whiskertracking.janelia.org) more easily and efficiently.
 
 My goal is to improve whiski in the following ways:
 
@@ -81,7 +81,7 @@ To use the pre-built binary (preferred):
 6. Add these modules to your Python path.
 7. `ln -s ~/dev/whisk/share/whisk/python ~/dev/whisk/python`
 8. or `echo "~/whisk/share" >> "~/.local/lib/python2.7/site-packages/whiski_wrap.pth`
-9. Test that everything worked by opening python or ipython and running `from whisk.python import traj, trace`
+9. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
 
 To build from source:
 
@@ -95,7 +95,7 @@ To build from source:
 8. `make`
 9. Copy a library into an expected location:
 10. `cp ~/dev/whisk/build/libwhisk.so ~/dev/whisk/python`
-11. Test that everything worked by opening python or ipython and running `from whisk.python import traj, trace`
+11. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
 
 ## Installing Python modules
 Here I outline the use of `conda` to manage and install Python modules. In the long run this is the easiest way. Unfortunately it doesn't work well with user-level `pip`. Specifically, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
@@ -127,6 +127,3 @@ git clone https://github.com/cxrodgers/WhiskiWrap.git
 4. Make sure the development directory is on your Python path.
 
 `echo "~/dev" >> ~/.local/lib/python2.7/site-packages/whiski_wrap.pth`
-
-
-
