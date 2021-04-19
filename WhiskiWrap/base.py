@@ -382,7 +382,7 @@ def pipeline_trace(input_vfile, h5_filename,
     setup_hdf5(h5_filename, expectedrows, measure=measure)
 
     # Figure out how many frames and epochs
-    duration = my.video.get_video_duration2(input_vfile)
+    duration = my.video.get_video_duration(input_vfile)
     frame_rate = my.video.get_video_params(input_vfile)[2]
     total_frames = int(np.rint(duration * frame_rate))
     if frame_stop is None:
