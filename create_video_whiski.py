@@ -87,13 +87,13 @@ N,H,W,C = vid.shape
 print('video shape is: ', vid.shape)
 
 video_out.set_output(W, H, output_path = output_video)
-
+plt.ioff()
 print('Generating video with whiskers..')
 for time_pos in range(N):
     print('time pos: ', time_pos)
     ws_coords = get_whisker(test_result,time_pos)
 
-    fig = plt.figure( dpi = H/5)
+    fig = plt.figure( dpi = H/5,)
     fig.set_size_inches(5. * W / H, 5, forward = False)
     canvas = FigureCanvas(fig)
     ax = plt.Axes(fig, [0., 0., 1., 1.])
@@ -109,6 +109,7 @@ for time_pos in range(N):
     image = image.reshape(int(height), int(width), 3)
     print(image.shape)
     video_out.update(image)
+    plt.close(fig)
 video_out.close()
 
 print("Done")

@@ -6,7 +6,7 @@ setup(
    version='1.0',
    author='',
    author_email='',
-   packages=['WhiskiWrap','my'],
+   packages=['WhiskiWrap','wwutils'],
    # scripts=['bin/script1','bin/script2'],
    url='http://pypi.python.org/pypi/WhiskiWrap/',
    license='LICENSE.txt',
