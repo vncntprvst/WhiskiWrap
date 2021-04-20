@@ -24,27 +24,27 @@ import my
 import pandas
 
 ## Deprecated stuff
-from my.video import OutOfFrames
+from wwutils.video import OutOfFrames
 
 def frame_dump(*args, **kwargs):
-    warnings.warn("use my.video instead of my.misc", stacklevel=2)
-    return my.video.frame_dump(*args, **kwargs)
+    warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
+    return wwutils.video.frame_dump(*args, **kwargs)
 
 def frame_dump_pipe(*args, **kwargs):
-    warnings.warn("use my.video instead of my.misc", stacklevel=2)
-    return my.video.get_frame(*args, **kwargs)
+    warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
+    return wwutils.video.get_frame(*args, **kwargs)
     
 def process_chunks_of_video(*args, **kwargs):
-    warnings.warn("use my.video instead of my.misc", stacklevel=2)
-    return my.video.process_chunks_of_video(*args, **kwargs)
+    warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
+    return wwutils.video.process_chunks_of_video(*args, **kwargs)
 
 def get_video_aspect(*args, **kwargs):
-    warnings.warn("use my.video instead of my.misc", stacklevel=2)
-    return my.video.get_video_aspect(*args, **kwargs)
+    warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
+    return wwutils.video.get_video_aspect(*args, **kwargs)
 
 def get_video_duration(*args, **kwargs):
-    warnings.warn("use my.video instead of my.misc", stacklevel=2)
-    return my.video.get_video_duration(*args, **kwargs)
+    warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
+    return wwutils.video.get_video_duration(*args, **kwargs)
 ##
 
 def globjoin(dirname, pattern, normalize=True):
@@ -1338,10 +1338,10 @@ def insert_mouse_and_task_levels(df, mouse2task, level=0, sort=True):
         A copy of `df` with the new levels inserted
     """
     # Insert mouse level
-    df = my.misc.insert_mouse_level(df)
+    df = wwutils.misc.insert_mouse_level(df)
     
     # Insert task level
-    df = my.misc.insert_level(
+    df = wwutils.misc.insert_level(
         df, name='task', 
         func=lambda idx: idx['mouse'].map(mouse2task))    
     
@@ -1431,13 +1431,13 @@ def find_image_shift(img0, img1):
     
     #~ # Debug plot
     #~ f, axa = plt.subplots(2, 2)
-    #~ my.plot.imshow(img0, ax=axa[0, 0])
+    #~ wwutils.plot.imshow(img0, ax=axa[0, 0])
     #~ axa[0, 0].set_title('img0')
-    #~ my.plot.imshow(img1, ax=axa[0, 1])
+    #~ wwutils.plot.imshow(img1, ax=axa[0, 1])
     #~ axa[0, 1].set_title('img1')
-    #~ my.plot.imshow(scipy.ndimage.shift(img0, displacement), ax=axa[1, 1])
+    #~ wwutils.plot.imshow(scipy.ndimage.shift(img0, displacement), ax=axa[1, 1])
     #~ axa[1, 1].set_title('img0 shifted to look like img1')
-    #~ my.plot.imshow(scipy.ndimage.shift(img1, -displacement), ax=axa[1, 0])
+    #~ wwutils.plot.imshow(scipy.ndimage.shift(img1, -displacement), ax=axa[1, 0])
     #~ axa[1, 0].set_title('img1 shifted to look like img0')
     
     return displacement
@@ -1601,8 +1601,8 @@ def gaussian_sum_smooth_pandas(data, evaluation_index, sigma,
     return ser
 
 def load_bwid(*args, **kwargs):
-    print("warning: replace my.misc.load_bwid with my.dataload.load_bwid")
-    return my.dataload.load_bwid(*args, **kwargs)
+    print("warning: replace wwutils.misc.load_bwid with wwutils.dataload.load_bwid")
+    return wwutils.dataload.load_bwid(*args, **kwargs)
     
 def stack_df_to_series(df):
     """Stack DataFrame until it becomes a series"""

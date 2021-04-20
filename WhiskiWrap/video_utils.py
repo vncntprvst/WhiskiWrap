@@ -9,7 +9,7 @@ import subprocess
 import pandas
 import re
 import datetime
-from my.video import get_video_params
+from wwutils.video import get_video_params
 
 def process_chunks_of_video(filename,
     frame_start=None, frame_stop=None, n_frames=None, frame_rate=None,
@@ -20,7 +20,7 @@ def process_chunks_of_video(filename,
     pix_fmt='gray', finalize='list'):
     """Read frames from video, apply function, return result
 
-    This has some advantage over my.video.process_chunks_of_video
+    This has some advantage over wwutils.video.process_chunks_of_video
     but is out of date and not really being used.
 
     The dataflow is:
@@ -59,7 +59,7 @@ def process_chunks_of_video(filename,
             so the result is a list of length equal to the total number of
             frames processed
 
-    This function has been modified from my.video to be optimized for
+    This function has been modified from wwutils.video to be optimized for
     processing chunks rather than entire videos.
 
     Returns: result, as described above

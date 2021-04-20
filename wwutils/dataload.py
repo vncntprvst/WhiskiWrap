@@ -113,7 +113,7 @@ def load_big_tm(params, dataset='no_opto', mouse2task=None):
 
     # Insert mouse and task levels
     if mouse2task is not None:
-        big_tm = my.misc.insert_mouse_and_task_levels(
+        big_tm = wwutils.misc.insert_mouse_and_task_levels(
             big_tm, mouse2task)
     
     return big_tm
@@ -169,12 +169,12 @@ def load_data_from_patterns(params, filename, dataset='no_opto',
             ).index
         
         # Apply mask
-        res = my.misc.slice_df_by_some_levels(res, included_trials)
+        res = wwutils.misc.slice_df_by_some_levels(res, included_trials)
         res.index = res.index.remove_unused_levels()
 
     # Insert mouse and task levels
     if mouse2task is not None:
-        res = my.misc.insert_mouse_and_task_levels(res, mouse2task)
+        res = wwutils.misc.insert_mouse_and_task_levels(res, mouse2task)
     
     return res
     
@@ -230,11 +230,11 @@ def load_data_from_logreg(params, filename, dataset='no_opto', mouse2task=None):
                 ).index
             
             # Apply mask
-            res = my.misc.slice_df_by_some_levels(res, included_trials)
+            res = wwutils.misc.slice_df_by_some_levels(res, included_trials)
             res.index = res.index.remove_unused_levels()
 
     # Insert mouse and task levels
     if mouse2task is not None:
-        res = my.misc.insert_mouse_and_task_levels(res, mouse2task)
+        res = wwutils.misc.insert_mouse_and_task_levels(res, mouse2task)
     
     return res

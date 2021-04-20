@@ -30,7 +30,7 @@ except ImportError as e:
 import pandas
 import WhiskiWrap
 from WhiskiWrap import video_utils
-import my
+import wwutils
 import scipy.io
 import ctypes
 import glob
@@ -382,8 +382,8 @@ def pipeline_trace(input_vfile, h5_filename,
     setup_hdf5(h5_filename, expectedrows, measure=measure)
 
     # Figure out how many frames and epochs
-    duration = my.video.get_video_duration(input_vfile)
-    frame_rate = my.video.get_video_params(input_vfile)[2]
+    duration = wwutils.video.get_video_duration(input_vfile)
+    frame_rate = wwutils.video.get_video_params(input_vfile)[2]
     total_frames = int(np.rint(duration * frame_rate))
     if frame_stop is None:
         frame_stop = total_frames
@@ -536,7 +536,7 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
     setup_hdf5(h5_filename, expectedrows)
 
     # The tiffs have been written, figure out which they are
-    tif_file_number_strings = my.misc.apply_and_filter_by_regex(
+    tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
         '^chunk(\d+).tif$', os.listdir(input_tiff_directory), sort=False)
     tif_full_filenames = [
         os.path.join(input_tiff_directory, 'chunk%s.tif' % fns)
@@ -739,7 +739,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     ## Extract the chunk numbers from the filenames
     # The tiffs have been written, figure out which they are
     split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
-    tif_file_number_strings = my.misc.apply_and_filter_by_regex(
+    tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
         '^chunk(\d+).tif$', split_traced_filenames, sort=False)
     tif_full_filenames = [
         os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
@@ -959,7 +959,7 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     ## Extract the chunk numbers from the filenames
     # The tiffs have been written, figure out which they are
     split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
-    tif_file_number_strings = my.misc.apply_and_filter_by_regex(
+    tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
         '^chunk(\d+).tif$', split_traced_filenames, sort=False)
     tif_full_filenames = [
         os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
@@ -1147,7 +1147,7 @@ class PFReader:
         self.pf_lib['pfDoubleRate_SetNrOfThreads'](n_threads)
 
         # Find all the imgN.mat files in the input directory
-        self.matfile_number_strings = my.misc.apply_and_filter_by_regex(
+        self.matfile_number_strings = wwutils.misc.apply_and_filter_by_regex(
             '^img(\d+)\.mat$', os.listdir(self.input_directory), sort=False)
         self.matfile_names = [
             os.path.join(self.input_directory, 'img%s.mat' % fns)
@@ -1163,7 +1163,7 @@ class PFReader:
 
         # Error check the file times
         filetimes = np.array([
-            my.misc.get_file_time(filename)
+            wwutils.misc.get_file_time(filename)
             for filename in self.sorted_matfile_names])
         if (np.diff(filetimes) < 0).any():
             if error_on_unsorted_filetimes:
@@ -1349,7 +1349,7 @@ class FFmpegReader:
         bufsize : probably not necessary because we read one frame at a time
         duration : duration of video to read (-t parameter)
         start_frame_time, start_frame_number : -ss parameter
-            Parsed using my.video.ffmpeg_frame_string
+            Parsed using wwutils.video.ffmpeg_frame_string
         write_stderr_to_screen : if True, writes to screen, otherwise to
             /dev/null
         """
@@ -1357,7 +1357,7 @@ class FFmpegReader:
 
         # Get params
         self.frame_width, self.frame_height, self.frame_rate = \
-            my.video.get_video_params(input_filename)
+            wwutils.video.get_video_params(input_filename)
 
         # Set up pix_fmt
         if pix_fmt == 'gray':
@@ -1374,7 +1374,7 @@ class FFmpegReader:
 
         # Add ss string
         if start_frame_time is not None or start_frame_number is not None:
-            ss_string = my.video.ffmpeg_frame_string(input_filename,
+            ss_string = wwutils.video.ffmpeg_frame_string(input_filename,
                 frame_time=start_frame_time, frame_number=start_frame_number)
             command += [
                 '-ss', ss_string]

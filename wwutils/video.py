@@ -476,7 +476,7 @@ def choose_rectangular_ROI(vfile, n_frames=4, interactive=False, check=True,
         be displayed as a hint to the user while selecting.
     """
     import matplotlib.pyplot as plt
-    import my.plot
+    import wwutils.plot
     # Not sure why this doesn't work if it's lower down in the function
     if interactive:
         plt.ion() 
@@ -493,8 +493,8 @@ def choose_rectangular_ROI(vfile, n_frames=4, interactive=False, check=True,
     f, axa = plt.subplots(1, 4, figsize=(11, 2.5))
     f.subplots_adjust(left=.05, right=.975, bottom=.05, top=.975)
     for frame, ax in zip(frames, axa.flatten()):
-        my.plot.imshow(frame, ax=ax, axis_call='image', cmap=plt.cm.gray)
-    my.plot.harmonize_clim_in_subplots(fig=f, clim=(0, 255))
+        wwutils.plot.imshow(frame, ax=ax, axis_call='image', cmap=plt.cm.gray)
+    wwutils.plot.harmonize_clim_in_subplots(fig=f, clim=(0, 255))
 
     # Get interactive results
     res = {}

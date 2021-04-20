@@ -358,7 +358,7 @@ def bootstrap_CIs_on_dataframe(df):
     """Returns CIs on the mean of each row
     
     Here's how to do it with a groupby:
-        res = gobj.apply(lambda df: my.bootstrap.bootstrap_CIs_on_dataframe(df.T))     
+        res = gobj.apply(lambda df: wwutils.bootstrap.bootstrap_CIs_on_dataframe(df.T))
     
     Returns: DataFrame
         Index will be the same as df.index
