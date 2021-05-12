@@ -145,12 +145,13 @@ def process_chunks_of_video(filename,
             if len(raw_image) < read_size_per_frame * this_chunk:
                 print("warning: ran out of frames")
                 out_of_frames = True
-                this_chunk = len(raw_image) / read_size_per_frame
+                this_chunk = len(raw_image) // read_size_per_frame
                 assert this_chunk * read_size_per_frame == len(raw_image)
 
             # Process
             flattened_im = np.fromstring(raw_image, dtype='uint8')
             if bytes_per_pixel == 1:
+                print(this_chunk, image_h, image_w)
                 video = flattened_im.reshape(
                     (this_chunk, image_h, image_w))
             else:
@@ -190,6 +191,7 @@ def process_chunks_of_video(filename,
     if frames_read != n_frames:
         # This usually happens when there's some rounding error in the frame
         # times
+        print(frames_read ,"!=", n_frames)
         raise ValueError("did not read the correct number of frames")
 
     # Stick chunks together
