@@ -20,7 +20,7 @@ import os
 import re
 import datetime
 import glob
-import my
+import wwutils
 import pandas
 
 ## Deprecated stuff

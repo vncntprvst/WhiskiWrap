@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
 import scipy.stats
 from . import misc
-import my
+import wwutils
 import pandas
 
 def alpha_blend_with_mask(rgb0, rgb1, alpha0, mask0):

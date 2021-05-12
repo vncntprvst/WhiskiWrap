@@ -1,7 +1,7 @@
 """Methods for loading shape data"""
 import pandas
 import os
-import my
+import wwutils
 
 def load_bwid(params, drop_1_and_6b=True):
     """Load big_waveform_info_df

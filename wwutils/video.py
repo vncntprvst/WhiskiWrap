@@ -453,7 +453,7 @@ def get_video_duration(video_filename):
         print('Warning: ', e)
         stream_duration = float(stream_duration_s)
 
-    assert stream_duration == container_duration
+    assert math.isclose(stream_duration, container_duration, rel_tol=1e-3), f"stream_duration ({stream_duration}) != container_duration ({container_duration}), relative {stream_duration/container_duration} "
     
     return stream_duration
 
