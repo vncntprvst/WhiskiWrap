@@ -5,6 +5,7 @@ to the author. All other rights reserved.
 """
 from warnings import warn
 
+import easygui
 import WhiskiWrap
 import os
 from multiprocessing import freeze_support
@@ -12,13 +13,21 @@ import argparse
 import shutil
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate whiski output from video.')
-    parser.add_argument('video_path',type=str, help='path to the video (video must have an extension e.g. video.avi).')
-
+    parser.add_argument('-v','--video_path',type=str, help='path to the video (video must have an extension e.g. video.avi).', default=None)
+    parser.add_argument('-u','--select-folder-ui',action='store_true', help='path to the video (video must have an extension e.g. video.avi).')
     args = parser.parse_args()
+    # if select folder with ui
+    if args.select_folder_ui:
+        video_path = easygui.fileopenbox()
+    else:
+        assert args.video_path is not None, 'Video path must be specified when video path is given.'
+        video_path = args.video_path
+
+
     # working directory is always the script directory
     wdir = os.getcwd()
     # get video name
-    video_fname = os.path.basename(args.video_path)
+    video_fname = os.path.basename(video_path)
     video_name = ''.join(video_fname.split('.')[:-1])
     # output_path has the same name of the video name plus whiki_
     output_path = os.path.join(wdir,'whiski_'+video_name)
@@ -30,7 +39,7 @@ if __name__ == '__main__':
     input_video = os.path.join(output_path,video_fname)
     if not os.path.exists(input_video):
         warn('input video didn\'t exist coping from source ' + output_path)
-        shutil.copy(args.video_path, input_video)
+        shutil.copy(video_path, input_video)
     output_file = os.path.join(output_path,video_name+'.hdf5')
     freeze_support()
     input_video = os.path.expanduser(input_video)

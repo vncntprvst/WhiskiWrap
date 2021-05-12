@@ -92,7 +92,6 @@ print('Generating video with whiskers..')
 for time_pos in range(N):
     print('time pos: ', time_pos)
     ws_coords = get_whisker(test_result,time_pos)
-
     fig = plt.figure( dpi = H/5,)
     fig.set_size_inches(5. * W / H, 5, forward = False)
     canvas = FigureCanvas(fig)
