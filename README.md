@@ -61,6 +61,7 @@ You may also add optional parameters to run the measure command
 
 # Installation
 WhiskiWrap is written in Python and relies on `ffmpeg` for reading input videos, `tifffile` for writing tiff stacks, `whiski` for tracing whiskers in the tiff stacks, and `pytables` for creating HDF5 files with all of the results.
+Also make sure that you have installed `ffmpeg-python>=0.2.0`.
 
 ## Installing `ffmpeg`
 First install [`ffmpeg`](https://www.ffmpeg.org/) and ensure it is available on your system path -- that is, you should be able to type `ffmpeg` in the terminal and it should find it and run it.
@@ -73,57 +74,41 @@ Next install [`whiski`](http://whiskertracking.janelia.org). There are several w
 
 To use the pre-built binary (preferred):
 
-1. Download the [zipped binary](http://whiskertracking.janelia.org/wiki/display/MyersLab/Whisker+Tracking+Downloads) and unpack it or get the file whisk-1.1.0d-64bit-Linux.tar.gz from someone. Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `~/dev/whisk`
+1. Download the [zipped binary](http://whiskertracking.janelia.org/wiki/display/MyersLab/Whisker+Tracking+Downloads):
+    1.1. Linux: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`.Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bashrc`
+    1.2. Windows: Download `whisk-1.1.0d-win32.exe` or `whisk-1.1.0d-win64.exe` install adding to the PATH.
+    1.3. Mac: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`. Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bash_profile`
 2. Add the binaries to your system path so that you can run `trace` from the command line.
-3. Add a few files to make `whiski`'s Python code work more nicely with other packages. (Technically, we need to make it a module, and avoid name collisions with the unrelated built-in module `trace`.)
-4. `touch ~/dev/whisk/share/whisk/__init__.py`
-5. `touch ~/dev/whisk/share/whisk/python/__init__.py`
-6. Add these modules to your Python path.
-7. `ln -s ~/dev/whisk/share/whisk/python ~/dev/whisk/python`
-8. or `echo "~/whisk/share" >> "~/.local/lib/python2.7/site-packages/whiski_wrap.pth`
-9. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
+3. To make it work with other packages you can install by running pip install . 
+4. Test that everything worked by opening python or ipython and running `import WhiskiWrap`
 
 To build from source:
 
 1. Install required dependencies (gl.h, etc)
 2. Download the source from my lightly modified fork, which makes the `__init__` changes described above.
 3. `cd ~/dev`
-4. `git clone https://github.com/cxrodgers/whisk.git`
+4. `git clone https://github.com/aiporre/whisk.git`
 5. `cd whisk`
-6. `mkdir build`
+6. `mkdir build && cd build`
 7. `cmake ..`
 8. `make`
-9. Copy a library into an expected location:
-10. `cp ~/dev/whisk/build/libwhisk.so ~/dev/whisk/python`
-11. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
+9. Copy a library into an expected location: `[Path-to-whisk-Cloned-Repo]/bin`
+    9.1. In Windows: append to the `PATH` environmental variable `[Path-to-whisk-Cloned-Repo]/bin`
+    9.2. In Linux:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.bashrc`
+    9.3. In MacOS:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.profile_bash`
+10. copy `cp libwhisk.so ../bin`
+11. 'cd ..'
+12. When you create your conda environment you should add whisk with `python setup.py install`
+13. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
+
 
 ## Installing Python modules
 Here I outline the use of `conda` to manage and install Python modules. In the long run this is the easiest way. Unfortunately it doesn't work well with user-level `pip`. Specifically, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
 
-0. Clone my into ~/dev for video processing functions.
-```
-cd ~/dev
-git clone https://github.com/cxrodgers/my.git
-```
-
-0.5. Install scipy.
-`conda install scipy`
-
-1. Create a new conda environment for WhiskiWrap.
-
-`conda create -n whiski_wrap python=2.7 pip numpy matplotlib pyqt pytables pandas ipython`
-2. Activate that environment and install `tifffile`
-```
-source activate whiski_wrap
-pip install tifffile
-```
-If `source activate whiski_wrap` doesn't work, try `conda activate whiski_wrap`
-
-3. Clone WhiskiWrap
-```
-cd ~/dev
-git clone https://github.com/cxrodgers/WhiskiWrap.git
-```
-4. Make sure the development directory is on your Python path.
-
-`echo "~/dev" >> ~/.local/lib/python2.7/site-packages/whiski_wrap.pth`
+1. create conda environemnt `conda create -n WhiskiWrap python=3.7 pip` (optional PyEnv or the nominal Python environment can also work)
+2. activate with `conda activate WhiskiWrap` or `source activate WhiskiWrap`  (optionally replace `WhiskiWrap` by your conda environment)
+4. Installing whisk python module `git clone https://github.com/aiporre/whisk.git && cd whisk && python setup.py install`
+3. Installing WhiskWrap python module `pip install .` in the directory of this project
+3.5. Install other packages...:
+        `conda install scipy`
+        `pip install tifffile`
