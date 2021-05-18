@@ -77,10 +77,12 @@ To use the pre-built binary (preferred):
     1. Windows: Download `whisk-1.1.0d-win32.exe` or `whisk-1.1.0d-win64.exe` install adding to the PATH.
     2. Linux: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`.Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bashrc`
     3. Mac: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`. Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bash_profile`
-2. Add the binaries to your system path so that you can run `trace` from the command line. Alternatively
-4. (In Unix/Linux) Copy `[Path-to-WhiskiWrap-Cloned-Repo]/whisk/bin`
-
-3. To make it work with other packages you can install by running pip install . 
+2. Add the binaries to your system path so that you can run `trace` from the command line.
+4. Install whisk package:
+    1. `git clone https://github.com/aiporre/whisk.git`
+    2. Copy recursively `[Path-to-WhiskiWrap-Cloned-Repo]/whisk/lib/whisk/` to `[Path-to-whisk-Cloned-Repo]/whisk/`
+    3. Install whisk package `cd [Path-to-whisk-Cloned-Repo] && pip install .`
+3. In the `WhiskiWrap` repo install now this package with:  `pip install .` 
 4. Test that everything worked by opening python or ipython and running `import WhiskiWrap`
 
 To build from source:
@@ -97,11 +99,11 @@ To build from source:
     1. In Windows: append to the `PATH` environmental variable `[Path-to-whisk-Cloned-Repo]/bin`
     2. In Linux:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.bashrc`
     3. In MacOS:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.profile_bash`
-10. copy `cp libwhisk.so ../bin`
+10. copy `cp libwhisk.so ../whisk` in Linux or mac, and `copy whisk.dll ..\whisk` in windows.
 11. 'cd ..'
-12. When you create your conda environment you should add whisk with `python setup.py install`
+12. When you create your conda environment you should add whisk with `pip install .`
 13. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
-
+14. You need to the binaries to then environmental variables `WHISKPATH` and/or `PATH` 
 
 ## Installing Python modules
 Here I outline the use of `conda` to manage and install Python modules. In the long run this is the easiest way. Unfortunately it doesn't work well with user-level `pip`. Specifically, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
