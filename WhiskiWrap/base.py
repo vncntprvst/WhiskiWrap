@@ -31,6 +31,9 @@ if sys.platform == 'win32':
     whisk_path = ''
 else:
     whisk_path = os.environ['WHISKPATH']
+    if not whisk_path.endswith('/'):
+        whisk_path += '/'
+    print('WHISKPATH detected: ', whisk_path)
 import pandas
 import WhiskiWrap
 from WhiskiWrap import video_utils
@@ -113,7 +116,7 @@ def trace_chunk(video_filename, delete_when_done=False):
     orig_dir = os.getcwd()
     run_dir, raw_video_filename = os.path.split(os.path.abspath(video_filename))
     whiskers_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).whiskers
-    command = [whisk_path.join('trace'), raw_video_filename, whiskers_file]
+    command = [whisk_path + 'trace', raw_video_filename, whiskers_file]
 
     os.chdir(run_dir)
     try:
@@ -130,7 +133,7 @@ def trace_chunk(video_filename, delete_when_done=False):
 
     if not os.path.exists(whiskers_file):
         print(raw_video_filename)
-        raise IOError("tracing seems to have failed")
+        raise IOError("tracing seems to have failed. STDOUT: " + stdout + '. STDERR: ' + stderr  )
 
     if delete_when_done:
         os.remove(video_filename)
@@ -198,7 +201,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
 
     # Run trace:
     whiskers_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).whiskers
-    trace_command = [whisk_path.join('trace'), raw_video_filename, whiskers_file]
+    trace_command = [whisk_path + 'trace', raw_video_filename, whiskers_file]
 
     os.chdir(run_dir)
     try:
