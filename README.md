@@ -73,12 +73,13 @@ Next install [`whiski`](http://whiskertracking.janelia.org). There are several w
 2. Build `whiski` from source, using my lightly customized fork. This will probably require more trouble-shooting to make sure all of its parts are working.
 
 To use the pre-built binary (preferred):
-
 1. Download the [zipped binary](http://whiskertracking.janelia.org/wiki/display/MyersLab/Whisker+Tracking+Downloads):
-    1.1. Linux: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`.Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bashrc`
-    1.2. Windows: Download `whisk-1.1.0d-win32.exe` or `whisk-1.1.0d-win64.exe` install adding to the PATH.
-    1.3. Mac: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`. Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bash_profile`
-2. Add the binaries to your system path so that you can run `trace` from the command line.
+    1. Windows: Download `whisk-1.1.0d-win32.exe` or `whisk-1.1.0d-win64.exe` install adding to the PATH.
+    2. Linux: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`.Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bashrc`
+    3. Mac: Unpack with `tar -xzf whisk-1.1.0d-64bit-Linux.tar.gz`. Rename the unpacked directory to `[Path-to-WhiskiWrap-Cloned-Repo]/whisk`. Add to `echo 'export WHISKPATH=[WhiskiWrap-Cloned-Path]/whisk' >> ~/.bash_profile`
+2. Add the binaries to your system path so that you can run `trace` from the command line. Alternatively
+4. (In Unix/Linux) Copy `[Path-to-WhiskiWrap-Cloned-Repo]/whisk/bin`
+
 3. To make it work with other packages you can install by running pip install . 
 4. Test that everything worked by opening python or ipython and running `import WhiskiWrap`
 
@@ -93,9 +94,9 @@ To build from source:
 7. `cmake ..`
 8. `make`
 9. Copy a library into an expected location: `[Path-to-whisk-Cloned-Repo]/bin`
-    9.1. In Windows: append to the `PATH` environmental variable `[Path-to-whisk-Cloned-Repo]/bin`
-    9.2. In Linux:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.bashrc`
-    9.3. In MacOS:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.profile_bash`
+    1. In Windows: append to the `PATH` environmental variable `[Path-to-whisk-Cloned-Repo]/bin`
+    2. In Linux:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.bashrc`
+    3. In MacOS:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.profile_bash`
 10. copy `cp libwhisk.so ../bin`
 11. 'cd ..'
 12. When you create your conda environment you should add whisk with `python setup.py install`
@@ -107,8 +108,7 @@ Here I outline the use of `conda` to manage and install Python modules. In the l
 
 1. create conda environemnt `conda create -n WhiskiWrap python=3.7 pip` (optional PyEnv or the nominal Python environment can also work)
 2. activate with `conda activate WhiskiWrap` or `source activate WhiskiWrap`  (optionally replace `WhiskiWrap` by your conda environment)
-4. Installing whisk python module `git clone https://github.com/aiporre/whisk.git && cd whisk && python setup.py install`
 3. Installing WhiskWrap python module `pip install .` in the directory of this project
-3.5. Install other packages...:
+4. Install other packages...:
         `conda install scipy`
         `pip install tifffile`

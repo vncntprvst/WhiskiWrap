@@ -1,0 +1,3 @@
+include WhiskiWrap/*.parameters
+include WhiskiWrap/line.detectorbank
+include WhiskiWrap/halfspace.detectorbank

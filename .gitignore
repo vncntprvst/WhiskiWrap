@@ -55,3 +55,6 @@ docs/_build/
 
 # PyBuilder
 target/
+.idea
+.DS_Store
+.idea/WhiskiWrap.iml .idea/inspectionProfiles .idea/misc.xml .idea/modules.xml .idea/workspace.xml

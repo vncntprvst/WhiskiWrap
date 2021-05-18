@@ -12,5 +12,6 @@ setup(
    license='LICENSE.txt',
    description='whiski package wrapper created by cxrodgers',
    long_description=open('README.md').read(),
-   install_requires=['tables','pandas','MediaInfo'],
+   install_requires=['tables>=3.5.1','pandas','MediaInfo'],
+   include_package_data=True,
 )
