@@ -21,12 +21,14 @@ import numpy as np
 import subprocess
 import multiprocessing
 import tables
-try:
-    from whisk import trace
-    from whisk.traj import MeasurementsTable
-except ImportError as e:
-    traceback.print_tb(e.__traceback__)
-    print("cannot import whisk")
+from . import wfile_io
+from .mfile_io import MeasurementsTable
+# try:
+#     from whisk import trace
+#     from whisk.traj import MeasurementsTable
+# except ImportError as e:
+#     traceback.print_tb(e.__traceback__)
+#     print("cannot import whisk")
 if sys.platform == 'win32':
     whisk_path = ''
 else:
@@ -293,7 +295,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             entire array of x-coordinates of each segment.
         /pixels_y : Same but for y-coordinates
     """
-    ## Load it, so we know what expectedrows is
+    ## Load it, so we know what expected rows is
     # This loads all whisker info into C data types
     # wv is like an array of trace.LP_cWhisker_Seg
     # Each entry is a trace.cWhisker_Seg and can be converted to
@@ -303,7 +305,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     #wv, nwhisk = trace.Debug_Load_Whiskers(whisk_filename)
     print(whisk_filename)
 
-    whiskers = trace.Load_Whiskers(whisk_filename)
+    whiskers = wfile_io.Load_Whiskers(whisk_filename)
     nwhisk = np.sum(list(map(len, list(whiskers.values()))))
 
     if measurements_filename is not None:

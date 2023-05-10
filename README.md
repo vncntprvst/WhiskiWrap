@@ -108,7 +108,7 @@ To build from source:
 ## Installing Python modules
 Here I outline the use of `conda` to manage and install Python modules. In the long run this is the easiest way. Unfortunately it doesn't work well with user-level `pip`. Specifically, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
 
-1. create conda environemnt `conda create -n WhiskiWrap python=3.7 pip` (optional PyEnv or the nominal Python environment can also work)
+1. create conda environemnt `conda create -n WhiskiWrap python=3.9 pip` (optional PyEnv or the nominal Python environment can also work)
 2. activate with `conda activate WhiskiWrap` or `source activate WhiskiWrap`  (optionally replace `WhiskiWrap` by your conda environment)
 3. Installing WhiskWrap python module `pip install .` in the directory of this project
 4. Install other packages...:
