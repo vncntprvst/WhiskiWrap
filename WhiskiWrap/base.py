@@ -135,7 +135,7 @@ def trace_chunk(video_filename, delete_when_done=False):
 
     if not os.path.exists(whiskers_file):
         print(raw_video_filename)
-        raise IOError("tracing seems to have failed. STDOUT: " + stdout + '. STDERR: ' + stderr  )
+	raise IOError("tracing seems to have failed. STDOUT: " + stdout.decode('ascii') + '. STDERR: ' + stderr.decode('ascii')  )
 
     if delete_when_done:
         os.remove(video_filename)
