@@ -21,11 +21,11 @@ import numpy as np
 import subprocess
 import multiprocessing
 import tables
-# from . import wfile_io
-# from .mfile_io import MeasurementsTable
+from . import wfile_io
+from .mfile_io import MeasurementsTable
 # for debugging
-from WhiskiWrap import wfile_io
-from WhiskiWrap.mfile_io import MeasurementsTable
+# from WhiskiWrap import wfile_io
+# from WhiskiWrap.mfile_io import MeasurementsTable
 
 # try:
 #     from whisk import trace
