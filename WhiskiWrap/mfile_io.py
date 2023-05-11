@@ -1,12 +1,14 @@
 """ mfile_io.py
 
-Author: Nathan Clack <clackn@janelia.hhmi.org>
+Author: Nathan Clack <clackn@janelia.hhmi.org>  
 Date  : 25 January 2009
 
 Copyright 2010 Howard Hughes Medical Institute.
 All rights reserved.
 Use is subject to Janelia Farm Research Campus Software Copyright 1.1
 license terms (http://license.janelia.org/license/jfrc_copyright_1_1.html).
+
+Moved to WhiskiWrap repository by Vincent Prevosto, 05/2023
 """
 import os,sys
 from ctypes import *

@@ -101,7 +101,10 @@ class WhiskerSeg_measure(tables.IsDescription):
     angle = tables.Float32Col()
     curvature = tables.Float32Col()
     chunk_start = tables.UInt32Col()
-
+    # Adding missing fields:
+    label = tables.UInt16Col()
+    face_x = tables.UInt16Col()
+    face_y = tables.UInt16Col()
 
 def write_chunk(chunk, chunkname, directory='.'):
     tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
@@ -322,23 +325,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     h5file = tables.open_file(h5_filename, mode="a")
 
     # See setup_hdf5 for creation of the table
-    # TODO: change WhiskerSeg_measure to add face_x / face_y
-    
-    # See mesurements_io.mex.c for assignment of fields:
-    #   *pfid = table[i].fid;
-    #   *pwid = table[i].wid;
-    #   *plabel  = table[i].state;
-    #   *pface_x = table[i].face_x;
-    #   *pface_y = table[i].face_y;
-    #   *plength      = table[i].data[0]; //see end of measure.c:Whisker_Segments_Measure for column assignments
-    #   *pscore       = table[i].data[1];
-    #   *pangle       = table[i].data[2];
-    #   *pcurvature   = table[i].data[3];
-    #   *pfollicle_x  = table[i].data[4]; 
-    #   *pfollicle_y  = table[i].data[5]; 
-    #   *ptip_x       = table[i].data[6]; 
-    #   *ptip_y       = table[i].data[7]; 
-
+    # 05/11/23: changed WhiskerSeg_measure to add face_x / face_y / label fields
 
     ## Iterate over rows and store
     table = h5file.get_node('/summary')
@@ -366,7 +353,9 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
                 h5seg['fol_y'] = measurements[measurements_idx][8]
                 h5seg['tip_x'] = measurements[measurements_idx][9]
                 h5seg['tip_y'] = measurements[measurements_idx][10]
-
+                h5seg['label'] = 0
+                h5seg['face_x'] = M._measurements.contents.face_x
+                h5seg['face_y'] = M._measurements.contents.face_y
 
                 measurements_idx += 1
 
@@ -376,7 +365,6 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             # Write x
             xpixels_vlarray.append(wseg.x)
             ypixels_vlarray.append(wseg.y)
-
 
     table.flush()
     h5file.close()
