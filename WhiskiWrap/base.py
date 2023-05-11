@@ -21,8 +21,12 @@ import numpy as np
 import subprocess
 import multiprocessing
 import tables
-from . import wfile_io
-from .mfile_io import MeasurementsTable
+# from . import wfile_io
+# from .mfile_io import MeasurementsTable
+# for debugging
+from WhiskiWrap import wfile_io
+from WhiskiWrap.mfile_io import MeasurementsTable
+
 # try:
 #     from whisk import trace
 #     from whisk.traj import MeasurementsTable
@@ -135,7 +139,7 @@ def trace_chunk(video_filename, delete_when_done=False):
 
     if not os.path.exists(whiskers_file):
         print(raw_video_filename)
-        raise IOError("tracing seems to have failed. STDOUT: " + stdout + '. STDERR: ' + stderr  )
+        raise IOError("tracing seems to have failed. STDOUT: " + stdout.decode('ascii') + '. STDERR: ' + stderr.decode('ascii')  )
 
     if delete_when_done:
         os.remove(video_filename)
@@ -248,7 +252,6 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
         os.remove(video_filename)
 
     return {'video_filename': video_filename,'stdout': stdout, 'stderr': stderr}
-
 
 def sham_trace_chunk(video_filename):
     print(("sham tracing", video_filename))
@@ -472,8 +475,6 @@ def pipeline_trace(input_vfile, h5_filename,
                     h5_filename=h5_filename,
                     chunk_start=chunk_start)
 
-
-
 def write_video_as_chunked_tiffs(input_reader, tiffs_to_trace_directory,
     chunk_size=200, chunk_name_pattern='chunk%08d.tif',
     stop_after_frame=None, monitor_video=None, timestamps_filename=None,
@@ -572,7 +573,6 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
             whisk_filename=fn.whiskers,
             h5_filename=h5_filename,
             chunk_start=chunk_start)
-
 
 def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     sensitive=False,
@@ -792,7 +792,6 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         'tif_sorted_file_numbers': tif_sorted_file_numbers,
         'tif_sorted_filenames': tif_sorted_filenames,
         }
-
 
 def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     sensitive=False,
