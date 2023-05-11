@@ -17,6 +17,7 @@ try:
 except ImportError:
     pass
 import os
+import re
 import numpy as np
 import subprocess
 import multiprocessing
@@ -320,6 +321,25 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     # Open file
     h5file = tables.open_file(h5_filename, mode="a")
 
+    # See setup_hdf5 for creation of the table
+    # TODO: change WhiskerSeg_measure to add face_x / face_y
+    
+    # See mesurements_io.mex.c for assignment of fields:
+    #   *pfid = table[i].fid;
+    #   *pwid = table[i].wid;
+    #   *plabel  = table[i].state;
+    #   *pface_x = table[i].face_x;
+    #   *pface_y = table[i].face_y;
+    #   *plength      = table[i].data[0]; //see end of measure.c:Whisker_Segments_Measure for column assignments
+    #   *pscore       = table[i].data[1];
+    #   *pangle       = table[i].data[2];
+    #   *pcurvature   = table[i].data[3];
+    #   *pfollicle_x  = table[i].data[4]; 
+    #   *pfollicle_y  = table[i].data[5]; 
+    #   *ptip_x       = table[i].data[6]; 
+    #   *ptip_y       = table[i].data[7]; 
+
+
     ## Iterate over rows and store
     table = h5file.get_node('/summary')
     h5seg = table.row
@@ -331,10 +351,10 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             h5seg['chunk_start'] = chunk_start
             h5seg['time'] = wseg.time + chunk_start
             h5seg['id'] = wseg.id
-            h5seg['fol_x'] = wseg.x[0]
-            h5seg['fol_y'] = wseg.y[0]
-            h5seg['tip_x'] = wseg.x[-1]
-            h5seg['tip_y'] = wseg.y[-1]
+            h5seg['fol_x'] = wseg.x[-1]
+            h5seg['fol_y'] = wseg.y[-1]
+            h5seg['tip_x'] = wseg.x[0]
+            h5seg['tip_y'] = wseg.y[0]
 
             if measurements_filename is not None:
                 h5seg['length'] = measurements[measurements_idx][3]
@@ -665,7 +685,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     while not out_of_frames:
         # Get a chunk of frames
         if verbose:
-            print(("loading chunk of frames starting with ", nframe))
+            print("loading chunk of frames starting with", nframe)
         chunk_of_frames = []
         for frame in iter_obj:
             if frame_func is not None:
@@ -748,11 +768,21 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     ## Extract the chunk numbers from the filenames
     # The tiffs have been written, figure out which they are
     split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
+    # tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
+    #     '^chunk(\d+).tif$', split_traced_filenames, sort=False)
+    
+    # Replace the format specifier with (\d+) in the pattern
+    mod_chunk_name_pattern = re.sub(r'%\d+d', r'(\\d+)', chunk_name_pattern)
+    mod_chunk_name_pattern = '^' + mod_chunk_name_pattern + '$'
     tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
-        '^chunk(\d+).tif$', split_traced_filenames, sort=False)
+        mod_chunk_name_pattern, split_traced_filenames, sort=False)
+
+    # Replace the format specifier with %s in the pattern
+    tif_chunk_name_pattern = re.sub(r'%\d+d', r'%s', chunk_name_pattern)
     tif_full_filenames = [
-        os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
+        os.path.join(tiffs_to_trace_directory, tif_chunk_name_pattern % fns)
         for fns in tif_file_number_strings]
+    
     tif_file_numbers = list(map(int, tif_file_number_strings))
     tif_ordering = np.argsort(tif_file_numbers)
     tif_sorted_filenames = np.array(tif_full_filenames)[
@@ -769,7 +799,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
             fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
             append_whiskers_to_hdf5(
                 whisk_filename=fn.whiskers,
-		measurements_filename = fn.measurements,
+		        measurements_filename = fn.measurements,
                 h5_filename=h5_filename,
                 chunk_start=chunk_start)
 
@@ -884,7 +914,7 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     while not out_of_frames:
         # Get a chunk of frames
         if verbose:
-            print(("loading chunk of frames starting with ", nframe))
+            print("loading chunk of frames starting with", nframe)
         chunk_of_frames = []
         for frame in iter_obj:
             if frame_func is not None:
@@ -1064,7 +1094,7 @@ def compress_pf_to_video(input_reader, chunk_size=200, stop_after_frame=None,
     while not out_of_frames:
         # Get a chunk of frames
         if verbose:
-            print(("loading chunk of frames starting with ", nframe))
+            print("loading chunk of frames starting with", nframe)
         chunk_of_frames = []
         for frame in iter_obj:
             if frame_func is not None:

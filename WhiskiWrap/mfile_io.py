@@ -535,7 +535,20 @@ class MeasurementsTable(object):
     nrows = c_int()
     if self._measurements:
       cWhisk.Free_Measurements_Table( self._measurements )
-    self._measurements = cWhisk.Measurements_Table_From_Filename( filename, None, byref(nrows) )
+
+    # import ctypes
+
+    # Define the argument types for Measurements_Table_From_Filename
+    # cWhisk.Measurements_Table_From_Filename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+
+    # Prepare the filename and other variables
+    bfilename = bytes(filename, 'utf-8') # Convert the string to a bytes object
+    formats = [bytes(f, 'utf-8') for f in ['v0', 'v1', 'v2', 'v3']]
+    # See Measurements_File_Formats in measurements_io.c for more information. v3 is default and will be 
+    # automatically detected anyway. Older formats are for 32bit systems. 
+
+    self._measurements = cWhisk.Measurements_Table_From_Filename(bfilename, formats[-1], byref(nrows))
+                                                    #  ctypes.byref(nrows))
     self._nrows = nrows.value
     self._sort_state = None #unknown
     return self
