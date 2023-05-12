@@ -18,30 +18,43 @@ class WhiskerPadROI:
 
 class WhiskingFun:
     @staticmethod
-    def find_whiskerpad(vid, splitUp=False):
-        vidFrame = cv2.cvtColor(vid.read()[1], cv2.COLOR_BGR2GRAY)
-
-        if splitUp is False:
-            splitUp = "no"
-
-        if splitUp.lower() == "no":
+    def find_whiskerpad(videofile, splitUp=False):
+        cap = cv2.VideoCapture(videofile)
+        vidFrame = cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2GRAY)
+        cap.release()
+        if not splitUp:
             # Get whisker pad coordinates
             whiskingParams = WhiskingFun.get_whisking_params(vidFrame)
 
-        elif splitUp.lower() == "yes":
-            nose_tip, face_axis, face_orientation = WhiskingFun.get_nose_tip_coordinates(vid.Path, vid.Name)
-            midWidth = round(vidFrame.shape[1] / 2)
-            if midWidth - vidFrame.shape[1] / 8 < nose_tip[0] < midWidth + vidFrame.shape[1] / 8:
-                # If nosetip x value within +/- 1/8 of frame width, use that value
-                midWidth = nose_tip[0]
-            # Get whisking parameters for left side
-            leftImage = vidFrame[:, :midWidth]
-            whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), face_axis, face_orientation)
-            # Get whisking parameters for right side
-            rightImage = vidFrame[:, midWidth:]
-            whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, face_axis, face_orientation)
-            whiskingParams[0].ImageSide = 'Left'
-            whiskingParams[1].ImageSide = 'Right'
+        elif splitUp:
+            nose_tip, face_axis, face_orientation = WhiskingFun.get_nose_tip_coordinates(videofile)
+            if face_axis == 'vertical':
+                midWidth = round(vidFrame.shape[1] / 2)
+                if midWidth - vidFrame.shape[1] / 8 < nose_tip[0] < midWidth + vidFrame.shape[1] / 8:
+                    # If nosetip x value within +/- 1/8 of frame width, use that value
+                    midWidth = nose_tip[0]
+                # Get whisking parameters for left side
+                leftImage = vidFrame[:, :midWidth]
+                whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), nose_tip, face_axis, face_orientation)
+                # Get whisking parameters for right side
+                rightImage = vidFrame[:, midWidth:]
+                whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, nose_tip, face_axis, face_orientation)
+                whiskingParams[0].ImageSide = 'Left'
+                whiskingParams[1].ImageSide = 'Right'
+
+            elif face_axis == 'horizontal':
+                midWidth = round(vidFrame.shape[0] / 2)
+                if midWidth - vidFrame.shape[0] / 8 < nose_tip[1] < midWidth + vidFrame.shape[0] / 8:
+                    # If nosetip y value within +/- 1/8 of frame height, use that value
+                    midWidth = nose_tip[1]
+                # Get whisking parameters for top side
+                topImage = vidFrame[:midWidth, :]
+                whiskingParams = WhiskingFun.get_whisking_params(topImage, midWidth - round(vidFrame.shape[0] / 2), nose_tip, face_axis, face_orientation)
+                # Get whisking parameters for bottom side
+                bottomImage = vidFrame[midWidth:, :]
+                whiskingParams[1] = WhiskingFun.get_whisking_params(bottomImage, round(vidFrame.shape[0] / 2) - midWidth, nose_tip, face_axis, face_orientation)
+                whiskingParams[0].ImageSide = 'Top'
+                whiskingParams[1].ImageSide = 'Bottom'
 
         return whiskingParams, splitUp
 
@@ -135,16 +148,31 @@ class WhiskingFun:
         wpImage = topviewImage_r[
             wpCoordinates_r[0, 1]:wpCoordinates_r[1, 1], wpCoordinates_r[1, 0]:wpCoordinates_r[2, 0], 0]
 
-        # Find brightness ratio for each dimension
-        top_bottom_ratio = np.sum(wpImage[0, :]) / np.sum(wpImage[-1, :])
-        left_right_ratio = np.sum(wpImage[:, 0]) / np.sum(wpImage[:, -1])
-
-        sideBrightness = {
-            'top_bottom_ratio': top_bottom_ratio,
-            'left_right_ratio': left_right_ratio
-        }
+        sideBrightness=WhiskingFun.get_side_brightness(wpImage)
 
         return wpCoordinates, wpLocation, wpRelativeLocation, sideBrightness
+
+    @staticmethod
+    def get_side_brightness(wpImage):
+        # Find brightness for each side
+        # top_bottom_ratio = np.sum(wpImage[0, :]) / np.sum(wpImage[-1, :])
+        # left_right_ratio = np.sum(wpImage[:, 0]) / np.sum(wpImage[:, -1])
+        top_brightness=np.sum(wpImage[0, :])
+        bottom_brightness=np.sum(wpImage[-1, :])
+        left_brightness=np.sum(wpImage[:, 0])
+        right_brightness=np.sum(wpImage[:, -1])
+
+        sideBrightness = {
+            'top': top_brightness,
+            'bottom': bottom_brightness,
+            'left': left_brightness,
+            'right': right_brightness
+        }
+
+        # assign label to the side with the highest brightness
+        sideBrightness['maxSide']=max(sideBrightness, key=sideBrightness.get) 
+    
+        return sideBrightness
 
     @staticmethod
     def get_whiskerpad_coord_interactive(topviewImage):
@@ -241,7 +269,7 @@ class WhiskingFun:
         kernel = np.ones((10,10),np.uint8)
         opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        return opening
+        return gray, opening
 
     @staticmethod
     def find_contours(opening):
@@ -263,11 +291,8 @@ class WhiskingFun:
             # open the next frame
             _, image = vidcap.read()
 
-            # Save the first frame as TIFF
-            # cv2.imwrite("first_frame.tiff", image)
-
             # Threshold the first frame and apply morphological opening to the binary image
-            opening = WhiskingFun.morph_open(image)
+            gray, opening = WhiskingFun.morph_open(image)
 
             # Find contours in the opened morphology
             contours = WhiskingFun.find_contours(opening)
@@ -282,6 +307,8 @@ class WhiskingFun:
         # Close the video file
         vidcap.release()
 
+        sideBrightness=WhiskingFun.get_side_brightness(opening)
+
         # Find the extreme points of the largest contour
         extrema = contour[:, 0, :]
         bottom_point = extrema[extrema[:, 1].argmax()]
@@ -291,10 +318,10 @@ class WhiskingFun:
 
         # We keep the extrema along the longest axis. 
         # The head side is the base of triangle, while the nose is the tip of the triangle
-        if np.linalg.norm(bottom_point - top_point) > np.linalg.norm(left_point - right_point):
+        if sideBrightness['maxSide'] == 'top' or sideBrightness['maxSide'] == 'bottom':
             # Find the base of the triangle: if left and right extrema are on the top half of the image, the top extrema is the base
             face_axis='vertical'
-            if left_point[1] < 200 and right_point[1] < 200:
+            if sideBrightness['maxSide'] == 'bottom':
                 face_orientation = 'up'
                 nose_tip = top_point
             else:
@@ -303,7 +330,7 @@ class WhiskingFun:
         else:
             # Find the base of the triangle: if top and bottom extrema are on the left half of the image, the left extrema is the base
             face_axis='horizontal'
-            if top_point[0] < 200 and bottom_point[0] < 200:
+            if sideBrightness['maxSide'] == 'right':
                 face_orientation = 'left'
                 nose_tip = left_point
             else:
@@ -311,7 +338,10 @@ class WhiskingFun:
                 nose_tip = right_point
 
         # Finally, adjust the nose tip coordinates to the original image coordinates
-        nose_tip = nose_tip + np.array([200, 200])
+        nose_tip = nose_tip + np.array([gray.shape[1]//2-200, gray.shape[0]//2-200])
+
+        # Save the frame with the nose tip labelled on it
+        cv2.imwrite(os.path.join(os.path.dirname(videoFileName), 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
 
         return nose_tip, face_axis, face_orientation
 
