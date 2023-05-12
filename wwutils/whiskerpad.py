@@ -8,6 +8,8 @@ import json
 # import subprocess
 import pandas as pd
 
+video_dir = ""
+
 class WhiskerPadROI:
     def __init__(self, x, y, width, height, side):
         self.X = x
@@ -35,10 +37,10 @@ class WhiskingFun:
                     midWidth = nose_tip[0]
                 # Get whisking parameters for left side
                 leftImage = vidFrame[:, :midWidth]
-                whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), nose_tip, face_axis, face_orientation)
+                whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), nose_tip, face_axis, face_orientation, image_side='Left')
                 # Get whisking parameters for right side
                 rightImage = vidFrame[:, midWidth:]
-                whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, nose_tip, face_axis, face_orientation)
+                whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, nose_tip, face_axis, face_orientation, image_side='Right')
                 whiskingParams[0].ImageSide = 'Left'
                 whiskingParams[1].ImageSide = 'Right'
 
@@ -49,10 +51,10 @@ class WhiskingFun:
                     midWidth = nose_tip[1]
                 # Get whisking parameters for top side
                 topImage = vidFrame[:midWidth, :]
-                whiskingParams = WhiskingFun.get_whisking_params(topImage, midWidth - round(vidFrame.shape[0] / 2), nose_tip, face_axis, face_orientation)
+                whiskingParams = WhiskingFun.get_whisking_params(topImage, midWidth - round(vidFrame.shape[0] / 2), nose_tip, face_axis, face_orientation, image_side='Top')
                 # Get whisking parameters for bottom side
                 bottomImage = vidFrame[midWidth:, :]
-                whiskingParams[1] = WhiskingFun.get_whisking_params(bottomImage, round(vidFrame.shape[0] / 2) - midWidth, nose_tip, face_axis, face_orientation)
+                whiskingParams[1] = WhiskingFun.get_whisking_params(bottomImage, round(vidFrame.shape[0] / 2) - midWidth, nose_tip, face_axis, face_orientation, image_side='Bottom')
                 whiskingParams[0].ImageSide = 'Top'
                 whiskingParams[1].ImageSide = 'Bottom'
 
@@ -81,23 +83,23 @@ class WhiskingFun:
                 midWidth = nose_tip[0]
             # Get whisking parameters for left side
             leftImage = vidFrame[:, :midWidth]
-            whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), interactive=True)
+            whiskingParams = WhiskingFun.get_whisking_params(leftImage, midWidth - round(vidFrame.shape[1] / 2), image_side='Left', interactive=True)
             # Get whisking parameters for right side
             rightImage = vidFrame[:, midWidth:]
-            whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, interactive=True)
+            whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, image_side='Right', interactive=True)
             whiskingParams[0].ImageSide = 'Left'
             whiskingParams[1].ImageSide = 'Right'
 
         return whiskingParams, splitUp
 
     @staticmethod
-    def get_whisking_params(topviewImage, midlineOffset, nose_tip=None, face_axis=None, face_orientation=None, interactive=False):
+    def get_whisking_params(topviewImage, midlineOffset, nose_tip=None, face_axis=None, face_orientation=None, image_side=None, interactive=False):
         if interactive:
-            wpCoordinates, wpLocation, wpRelativeLocation, sideBrightness = WhiskingFun.get_whiskerpad_coord_interactive(topviewImage)
+            wpCoordinates, wpLocation, wpRelativeLocation = WhiskingFun.get_whiskerpad_coord_interactive(topviewImage)
         else:
-            wpCoordinates, wpLocation, wpRelativeLocation, sideBrightness = WhiskingFun.get_whiskerpad_coord(topviewImage, nose_tip, face_axis, face_orientation)
+            wpCoordinates, wpLocation, wpRelativeLocation = WhiskingFun.get_whiskerpad_coord(topviewImage, nose_tip, face_axis, face_orientation, image_side)
 
-        faceSideInImage, protractionDirection, linkingDirection = WhiskingFun.get_whiskerpad_params(wpCoordinates, wpRelativeLocation, sideBrightness)
+        faceSideInImage, protractionDirection, linkingDirection = WhiskingFun.get_whiskerpad_params(wpCoordinates, wpRelativeLocation)
         whiskingParams = {
             'Coordinates': np.round(wpCoordinates, 2),
             'Location': wpLocation,
@@ -111,46 +113,160 @@ class WhiskingFun:
         return whiskingParams
 
     @staticmethod
-    def get_whiskerpad_coord(topviewImage, nose_tip, face_axis, face_orientation):
+    def get_whiskerpad_coord(topviewImage, nose_tip, face_axis, face_orientation, image_side):
 
         # TODO: debug this function
         
-        # Get whisker pad coordinates, according to nose tip, face_axis and face orientation
+        contour=None
+        while contour is None or len(contour) == 0:
+            # Threshold the first frame and apply morphological opening to the binary image
+            gray, opening = WhiskingFun.morph_open(topviewImage)
+
+            # Find contours in the opened morphology
+            contours = WhiskingFun.find_contours(opening)
+
+            # Filter contours based on minimum area threshold
+            minArea = 3000
+            filteredContours = [cnt for cnt in contours if cv2.contourArea(cnt) >= minArea]
+
+            # Find the largest contour
+            contour = max(filteredContours, key=cv2.contourArea)
+
+        # plot image, and overlay the contour on top
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Face contour')
+        # ax.plot(contour[:, 0, 0], contour[:, 0, 1], linewidth=2, color='r')
+        # plt.show()
+
+        # At this point, the contour is roughly a right triangle: 
+        # two straight sides are the image border, and the face contour is the "hypothenuse".
+        # Extract the face outline from the contour.
+
         if face_axis == 'vertical':
-            if face_orientation == 'up':
-                wpPosition = [nose_tip[0] - 10, nose_tip[1] + 10, 20, 20]
-            elif face_orientation == 'down':
-                wpPosition = [nose_tip[0] - 10, nose_tip[1] - 10, 20, 20]
+            if face_orientation == 'down':
+                # starting point is the point with the lowest x value and lowest y value
+                starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                # Find the index of the starting point in the contour
+                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
+                # ending point is the point with the highest x value and highest y value
+                ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                # Find the index of the ending point in the contour
+                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
+
+                # face contour is the part of the contour bounded by those indices
+                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
+
+            elif face_orientation == 'up':
+                # starting point is the point with the lowest x value and highest y value
+                starting_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                # Find the index of the starting point in the contour
+                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
+                # ending point is the point with the highest x value and lowest y value
+                ending_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                # Find the index of the ending point in the contour
+                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
+
+                # face contour is the part of the contour bounded by those indices
+                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
         elif face_axis == 'horizontal':
             if face_orientation == 'left':
-                wpPosition = [nose_tip[0] + 10, nose_tip[1] - 10, 20, 20]
+                # starting point is the point with the lowest x value and lowest y value
+                starting_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                # Find the index of the starting point in the contour
+                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
+                # ending point is the point with the highest x value and highest y value
+                ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                # Find the index of the ending point in the contour
+                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
+
+                # face contour is the part of the contour bounded by those indices
+                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
+
             elif face_orientation == 'right':
-                wpPosition = [nose_tip[0] - 10, nose_tip[1] - 10, 20, 20]
+                # starting point is the point with the highest x value and lowest y value
+                starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                # Find the index of the starting point in the contour
+                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
+                # ending point is the point with the lowest x value and highest y value
+                ending_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                # Find the index of the ending point in the contour
+                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
 
-        wpLocation = np.round([wpPosition[0] + wpPosition[2] / 2, wpPosition[1] + wpPosition[3] / 2])
-        wpRelativeLocation = [wpLocation[0] / topviewImage.shape[1], wpLocation[1] / topviewImage.shape[0]]
-        # Get vertices of the whisker pad ROI
-        wpCoordinates = wpPosition + [wpPosition[0] + wpPosition[2], wpPosition[1] + wpPosition[3]]
-        # wpCoordinates = np.round(wpAttributes.get_path().vertices)
+                # face contour is the part of the contour bounded by those indices
+                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
 
-        # Rotate image and ROI to get whisker-pad-centered image
-        topviewImage_r = np.rot90(topviewImage, k=2)
-        # np.rot90(topviewImage, k=int(wpAttributes.angle / 90))
-        imageCenter = np.floor(wpLocation)
-        # np.floor(wpAttributes.axes.camera_position[:2])
-        center = np.tile(imageCenter, (wpCoordinates.shape[0], 1))
-        theta = np.deg2rad(180)
-        # np.deg2rad(wpAttributes.angle)
+        # now if a straight line between the starting point and the ending point
+        # and rotate it to plot it as the x-axis, let's find the highest y value 
+        # on the rotated contour, and use that as the whisker pad location
+        # first, find the angle of the straight line
+        theta = np.arctan((ending_point[1] - starting_point[1]) / (ending_point[0] - starting_point[0]))
+        # then, rotate the contour by that angle
         rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
-        wpCoordinates_r = np.round(np.dot((wpCoordinates - center), rot) + center)
-        wpCoordinates_r[wpCoordinates_r <= 0] = 1
+        face_contour_r = np.round(np.dot(face_contour - starting_point, rot) + starting_point)
 
-        wpImage = topviewImage_r[
-            wpCoordinates_r[0, 1]:wpCoordinates_r[1, 1], wpCoordinates_r[1, 0]:wpCoordinates_r[2, 0], 0]
+        # # PLot the face contour on top of the image
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Face contour')
+        # ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
+        # plt.show()
 
-        sideBrightness=WhiskingFun.get_side_brightness(wpImage)
+        # Mext, find the index of the highest y value on the rotated contour
+        wpLocationIndex = face_contour_r[:, 1].argmax()
+        # the whisker pad location in the original image is the wpLocationIndex of the face contour 
+        wpLocation = face_contour[wpLocationIndex, :]
 
-        return wpCoordinates, wpLocation, wpRelativeLocation, sideBrightness
+        # # Plot image and wpLocation on top
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Face contour')
+        # ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
+        # ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
+        # plt.show()
+
+        # if is within 200 pixels of the nose tip, keep it
+        if np.linalg.norm(wpLocation - nose_tip) < 200:
+
+            # Save the image with the contour overlayed and the whisker pad location labelled on it
+            image_with_contour = topviewImage.copy()
+            cv2.drawContours(image_with_contour, [face_contour], -1, (0, 255, 0), 3)
+            # define file name based on face orientation 
+            output_path = os.path.join(video_dir, 'whiskerpad_' + image_side.lower() + '.jpg')
+            cv2.imwrite(output_path, cv2.circle(image_with_contour, tuple(wpLocation), 10, (255, 0, 0), -1))
+
+            # Define whisker pad position (wpPosition) as the rectangle around the whisker pad location
+            wpPosition = [wpLocation[0] - 10, wpLocation[1] - 10, 20, 20]
+
+        else:
+            # Get ballpark whisker pad coordinates, according to nose tip, face_axis and face orientation
+            # Define whiskerpad position (wpPosition) as the rectangle around the nose tip, offset by 10 pixels towards the face
+            if face_axis == 'vertical':
+                if face_orientation == 'up':
+                    wpPosition = [nose_tip[0] - 10, nose_tip[1] + 10, 20, 20]
+                elif face_orientation == 'down':
+                    wpPosition = [nose_tip[0] - 10, nose_tip[1] - 10, 20, 20]
+            elif face_axis == 'horizontal':
+                if face_orientation == 'left':
+                    wpPosition = [nose_tip[0] + 10, nose_tip[1] - 10, 20, 20]
+                elif face_orientation == 'right':
+                    wpPosition = [nose_tip[0] - 10, nose_tip[1] - 10, 20, 20]
+
+            # Define whisker pad location (wpLocation) as the center of the whisker pad position
+            wpLocation = np.round([wpPosition[0] + wpPosition[2] / 2, wpPosition[1] + wpPosition[3] / 2])
+
+        # Define whisker pad relative location (wpRelativeLocation) as the whisker pad location divided by the image dimensions
+        wpRelativeLocation = [wpLocation[0] / topviewImage.shape[1], wpLocation[1] / topviewImage.shape[0]]
+
+        # plot image, and overlay whisker pad position and location on top
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Draw rectangle around whisker pad')
+        # wpAttributes = plt.Rectangle((wpPosition[0], wpPosition[1]), wpPosition[2], wpPosition[3], label='align', visible=False, fill=False)
+        # ax.add_patch(wpAttributes)
+        # plt.show()
+
+        return wpPosition, wpLocation, wpRelativeLocation
 
     @staticmethod
     def get_side_brightness(wpImage):
@@ -252,18 +368,22 @@ class WhiskingFun:
         return wData, blacklist.tolist()
 
     @staticmethod
-    def morph_open(image):
+    def morph_open(image, crop=False):
         # convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        if image.ndim == 3 and image.shape[2] == 3:  # Check if image has 3 dimensions and 3 channels (BGR)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image  # No need for conversion, already grayscale
 
-        # Crop image center to 400x400 pixels
-        # find center of the image
-        center_x, center_y = gray.shape[1]//2, gray.shape[0]//2
-        # crop image
-        crop_img = gray[center_y-200:center_y+200, center_x-200:center_x+200]
-        
+        if crop:
+            # Crop image center to 400x400 pixels
+            # find center of the image
+            center_x, center_y = gray.shape[1]//2, gray.shape[0]//2
+            # crop image
+            gray = gray[center_y-200:center_y+200, center_x-200:center_x+200]
+            
         # Apply an inverse binary threshold to the cropped image, with a threshold value of 9
-        _, binary = cv2.threshold(crop_img, 9, 255, cv2.THRESH_BINARY_INV)
+        _, binary = cv2.threshold(gray, 9, 255, cv2.THRESH_BINARY_INV)
 
         # Apply morphological opening to the thresholded image with anchor 5,5  1 iteration, shape rectangle 10,10
         kernel = np.ones((10,10),np.uint8)
@@ -292,7 +412,7 @@ class WhiskingFun:
             _, image = vidcap.read()
 
             # Threshold the first frame and apply morphological opening to the binary image
-            gray, opening = WhiskingFun.morph_open(image)
+            gray, opening = WhiskingFun.morph_open(image, crop=True)
 
             # Find contours in the opened morphology
             contours = WhiskingFun.find_contours(opening)
@@ -341,7 +461,7 @@ class WhiskingFun:
         nose_tip = nose_tip + np.array([gray.shape[1]//2-200, gray.shape[0]//2-200])
 
         # Save the frame with the nose tip labelled on it
-        cv2.imwrite(os.path.join(os.path.dirname(videoFileName), 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
+        cv2.imwrite(os.path.join(video_dir, 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
 
         return nose_tip, face_axis, face_orientation
 
@@ -352,6 +472,9 @@ if __name__ == '__main__':
     parser.add_argument("--splitUp", action="store_true", help="Flag to split the video")
     parser.add_argument("--interactive", action="store_true", help="Flag for interactive mode")
     args = parser.parse_args()
+
+    # assign value to global variable video_dir
+    video_dir = os.path.dirname(args.videofile)
 
     # Get whisking parameters
     if args.interactive:
