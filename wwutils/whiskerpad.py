@@ -10,12 +10,15 @@ import pandas as pd
 
 video_dir = ""
 
+# TODO: save video filename in json file
+
 class WhiskingParams:
     def __init__(self, wpArea, wpLocation, wpRelativeLocation, fp=None):
         if fp is not None:
             self.FaceAxis = fp.FaceAxis
             self.FaceOrientation = fp.FaceOrientation
             self.NoseTip = fp.NoseTip
+            self.MidlineOffset = fp.MidlineOffset
         self.AreaCoordinates = wpArea
         self.Location = wpLocation
         self.RelativeLocation = wpRelativeLocation
@@ -26,11 +29,29 @@ class WhiskingParams:
         self.MidlineOffset = 0
         self.ImageDimensions = []
 
+class WhiskingParamsEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, WhiskingParams):
+            # Convert WhiskingParams object to a dictionary
+            params_dict = obj.__dict__.copy()
+            # Convert ndarray objects to lists
+            params_dict['Location'] = params_dict['Location'].tolist()
+            params_dict['NoseTip'] = params_dict['NoseTip'].tolist()
+            # Convert numpy.int64 to int
+            params_dict['MidlineOffset'] = int(params_dict['MidlineOffset'])
+            # Return the updated dictionary
+            return params_dict
+        if isinstance(obj, np.int64):
+            # Convert numpy.int64 to int
+            return int(obj)
+        return super().default(obj)
+
 class FaceParams:
-    def __init__(self, face_axis, face_orientation, nose_tip=None):
+    def __init__(self, face_axis, face_orientation, nose_tip=None, midline_offset=0):
         self.FaceAxis = face_axis
         self.FaceOrientation = face_orientation
         self.NoseTip = nose_tip
+        self.MidlineOffset = midline_offset
 
 class WhiskingFun:
     @staticmethod
@@ -72,6 +93,7 @@ class WhiskingFun:
         for image, side, side_id in zip(image_halves, image_side, range(len(image_halves))):
             wp[side_id] = WhiskingFun.find_whiskerpad(image, fp, image_side=side)           
             wp[side_id].ImageSide = side
+            wp[side_id].ImageDimensions = image.shape
             wp[side_id].FaceImageSide, wp[side_id].ProtractionDirection, wp[side_id].LinkingDirection = WhiskingFun.get_whisking_params(wp[side_id])
 
         return wp, splitUp
@@ -111,14 +133,11 @@ class WhiskingFun:
             # whiskingParams[1] = WhiskingFun.get_whisking_params(rightImage, round(vidFrame.shape[1] / 2) - midWidth, fp.NoseTip, face_axis=None, face_orientation=None, image_side='Right', interactive=True)
             wpCoordinates, wpLocation, wpRelativeLocation = WhiskingFun.find_whiskerpad_interactive(rightImage, midWidth - round(vidFrame.shape[1] / 2), fp.NoseTip, face_axis=None, face_orientation=None, image_side='Right')
             
-            
-            
             whiskingParams[0].ImageSide = 'Left'
             whiskingParams[1].ImageSide = 'Right'
 
         return whiskingParams, splitUp
             
-
     @staticmethod
     def find_whiskerpad(topviewImage, fp, image_side):
         
@@ -138,11 +157,13 @@ class WhiskingFun:
             contour = max(filteredContours, key=cv2.contourArea)
 
         # plot image, and overlay the contour on top
-        # fig, ax = plt.subplots()
-        # ax.imshow(topviewImage)
-        # plt.title('Face contour')
-        # ax.plot(contour[:, 0, 0], contour[:, 0, 1], linewidth=2, color='r')
-        # plt.show()
+        fig, ax = plt.subplots()
+        ax.imshow(topviewImage)
+        plt.title('Face contour')
+        ax.plot(contour[:, 0, 0], contour[:, 0, 1], linewidth=2, color='r')
+        plt.show()
+
+        contour_brightSide = WhiskingFun.get_side_brightness(opening, contour)
 
         # At this point, the contour is roughly a right triangle: 
         # two straight sides are the image border, and the face contour is the "hypothenuse".
@@ -150,53 +171,58 @@ class WhiskingFun:
 
         if fp.FaceAxis == 'vertical':
             if fp.FaceOrientation == 'down':
-                # starting point is the point with the lowest x value and lowest y value
-                starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
-                # Find the index of the starting point in the contour
-                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
-                # ending point is the point with the highest x value and highest y value
-                ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
-                # Find the index of the ending point in the contour
-                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
-                # face contour is the part of the contour bounded by those indices
-                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
-
+                if contour_brightSide['maxSide'] == 'right':
+                    # starting point is the point with the lowest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                    # ending point is the point with the highest x value and highest y value
+                    ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                if contour_brightSide['maxSide'] == 'left':
+                    # starting point is the point with the lowest x value and highest y value
+                    starting_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                    # ending point is the point with the lowest x value and highest y value
+                    ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
             elif fp.FaceOrientation == 'up':
-                # starting point is the point with the lowest x value and highest y value
-                starting_point = contour[contour[:, 0, 1].argmax(), 0, :]
-                # Find the index of the starting point in the contour
-                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
-                # ending point is the point with the highest x value and lowest y value
-                ending_point = contour[contour[:, 0, 1].argmin(), 0, :]
-                # Find the index of the ending point in the contour
-                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
-                # face contour is the part of the contour bounded by those indices
-                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
-
+                if contour_brightSide['maxSide'] == 'right':
+                    # starting point is the point with the highest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                    # ending point is the point with the lowest x value and lowest y value
+                    ending_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                if contour_brightSide['maxSide'] == 'left':
+                    # starting point is the point with the highest x value and highest y value
+                    starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                    # ending point is the point with the lowest x value and highest y value
+                    ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
         elif fp.FaceAxis == 'horizontal':
             if fp.FaceOrientation == 'left':
-                # starting point is the point with the lowest x value and lowest y value
-                starting_point = contour[contour[:, 0, 0].argmin(), 0, :]
-                # Find the index of the starting point in the contour
-                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
-                # ending point is the point with the highest x value and highest y value
-                ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
-                # Find the index of the ending point in the contour
-                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
-                # face contour is the part of the contour bounded by those indices
-                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
-
+                if contour_brightSide['maxSide'] == 'top':
+                    # starting point is the point with the lowest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                    # ending point is the point with the highest x value and lowest y value
+                    ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                if contour_brightSide['maxSide'] == 'bottom':
+                    # starting point is the point with the lowest x value and highest y value
+                    starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                    # ending point is the point with the lowest x value and lowest y value
+                    ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
             elif fp.FaceOrientation == 'right':
-                # starting point is the point with the highest x value and lowest y value
-                starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
-                # Find the index of the starting point in the contour
-                starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
-                # ending point is the point with the lowest x value and highest y value
-                ending_point = contour[contour[:, 0, 0].argmin(), 0, :]
-                # Find the index of the ending point in the contour
-                ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
-                # face contour is the part of the contour bounded by those indices
-                face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
+                if contour_brightSide['maxSide'] == 'top':
+                    # starting point is the point with the highest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                    # ending point is the point with the lowest x value and lowest y value
+                    ending_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                if contour_brightSide['maxSide'] == 'bottom':
+                    # starting point is the point with the highest x value and highest y value
+                    starting_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                    # ending point is the point with the lowest x value and highest y value
+                    ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
+
+ 
+        # Find the index of the starting point in the contour
+        starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
+        # Find the index of the ending point in the contour
+        ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
+        # face contour is the part of the contour bounded by those indices
+        face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
 
         # Assuming a straight line between the starting point and the ending point,
         # we rotate the curve to set that line as the x-axis. We then find the highest y value 
@@ -216,19 +242,28 @@ class WhiskingFun:
         wpLocation = face_contour[wpLocationIndex, :]
 
         # # Plot image and wpLocation on top
-        # fig, ax = plt.subplots()
-        # ax.imshow(topviewImage)
-        # plt.title('Face contour')
-        # ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
-        # ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
-        # plt.show()
+        fig, ax = plt.subplots()
+        ax.imshow(topviewImage)
+        plt.title('Face contour')
+        ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
+        ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
+        plt.show()
 
-        # if is within 1/4 of the image width from the nose tip, in the orthogonal direction of the head axis, keep it
+        # if is within 1/3 of the image width from the nose tip (or midline), in the orthogonal direction of the head axis, keep it
         keep_wp_location = False
         if fp.FaceAxis == 'vertical':
-                keep_wp_location = np.abs(wpLocation[0] - fp.NoseTip[0]) < topviewImage.shape[1] / 4
+                # Need to substract the original image midline when right side image
+                if fp.NoseTip[0] >= topviewImage.shape[1]:
+                    nose_tip_offset = topviewImage.shape[1]
+                else:
+                    nose_tip_offset = 0
+                keep_wp_location = np.abs(wpLocation[0] - nose_tip_offset) < topviewImage.shape[1] / 3
         elif fp.FaceAxis == 'horizontal':
-                keep_wp_location = np.abs(wpLocation[1] - fp.NoseTip[1]) < topviewImage.shape[0] / 4
+                if fp.NoseTip[1] >= topviewImage.shape[0]:
+                    nose_tip_offset = topviewImage.shape[0]
+                else:
+                    nose_tip_offset = 0
+                keep_wp_location = np.abs(wpLocation[1] - fp.NoseTip[1]) < topviewImage.shape[0] / 3
                 
         if keep_wp_location:
             # Save the image with the contour overlayed and the whisker pad location labelled on it
@@ -276,7 +311,13 @@ class WhiskingFun:
         return whiskingParams
 
     @staticmethod
-    def get_side_brightness(wpImage):
+    def get_side_brightness(wpImage, contour=None):
+
+        # If contour is provided, crop image to rectangle defined by contour extreme points
+        if contour is not None:
+            extrema = contour[:, 0, :]
+            wpImage = wpImage[extrema[:, 1].min():extrema[:, 1].max(), extrema[:, 0].min():extrema[:, 0].max()]
+
         # Find brightness for each side
         top_brightness=np.sum(wpImage[0, :])
         bottom_brightness=np.sum(wpImage[-1, :])
@@ -290,7 +331,7 @@ class WhiskingFun:
             'right': right_brightness
         }
 
-        # Identify to the side with the highest brightness
+        # Identify the side with the highest brightness (remember that the image is thresholded with an inverse binary threshold)
         sideBrightness['maxSide']=max(sideBrightness, key=sideBrightness.get) 
     
         # Add side brightness ratio
@@ -349,11 +390,6 @@ class WhiskingFun:
         linkingDirection = 'rostral'
 
         return faceImageSide, protractionDirection, linkingDirection
-
-    @staticmethod
-    def save_whiskerpad_params(whiskingParams, trackingDir):
-        with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
-            json.dump(whiskingParams, file, indent='\t')
 
     @staticmethod
     def RestrictToWhiskerPad(wData, whiskerpadCoords, ImageDim):
@@ -439,7 +475,7 @@ class WhiskingFun:
         # Close the video file
         vidcap.release()
 
-        sideBrightness=WhiskingFun.get_side_brightness(opening)
+        sideBrightness=WhiskingFun.get_side_brightness(opening, contour)
 
         # Find the extreme points of the largest contour
         extrema = contour[:, 0, :]
@@ -472,13 +508,25 @@ class WhiskingFun:
         # Finally, adjust the nose tip coordinates to the original image coordinates
         nose_tip = nose_tip + np.array([image.shape[1]//2-200, image.shape[0]//2-200])
 
+        # Find the midline offset
+        midline_offset = np.abs(nose_tip[0] - image.shape[1] / 2)
+
         # Save the frame with the nose tip labelled on it
         cv2.imwrite(os.path.join(video_dir, 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
 
         # instanciate whiskparams with nose_tip, face_axis, face_orientation
-        face_params = FaceParams(face_axis, face_orientation, nose_tip)
+        face_params = FaceParams(face_axis, face_orientation, nose_tip, midline_offset)
 
         return face_params, initialFrame
+
+    @staticmethod
+    def save_whiskerpad_params(whiskingParams, trackingDir):
+        # Save whiskerpad parameters to json file 
+        with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
+            json.dump(whiskingParams, file, indent='\t', cls=WhiskingParamsEncoder)
+
+        # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
+        #     json.dump(whiskingParams, file, indent='\t')
 
 if __name__ == '__main__':
     # Parse arguments
@@ -496,5 +544,8 @@ if __name__ == '__main__':
         whiskingParams, splitUp = WhiskingFun.draw_whiskerpad_roi(args.videofile, args.splitUp)
     else:
         whiskingParams, splitUp = WhiskingFun.get_whiskerpad_params(args.videofile, args.splitUp)
+
+    # Save whisking parameters to json file
+    WhiskingFun.save_whiskerpad_params(whiskingParams, video_dir)
 
     print(whiskingParams)
