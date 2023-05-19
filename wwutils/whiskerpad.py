@@ -7,10 +7,9 @@ from matplotlib.path import Path
 import json
 # import subprocess
 import pandas as pd
+import copy
 
 video_dir = ""
-
-# TODO: save video filename in json file
 
 class WhiskingParams:
     def __init__(self, wpArea, wpLocation, wpRelativeLocation, fp=None):
@@ -23,10 +22,9 @@ class WhiskingParams:
         self.Location = wpLocation
         self.RelativeLocation = wpRelativeLocation
         self.ImageSide = None
-        self.FaceImageSide = None
+        self.ImageBorderAxis = None
         self.ProtractionDirection = None
         self.LinkingDirection = None
-        self.MidlineOffset = 0
         self.ImageDimensions = []
 
 class WhiskingParamsEncoder(json.JSONEncoder):
@@ -47,11 +45,15 @@ class WhiskingParamsEncoder(json.JSONEncoder):
         return super().default(obj)
 
 class FaceParams:
-    def __init__(self, face_axis, face_orientation, nose_tip=None, midline_offset=0):
+    def __init__(self, face_axis, face_orientation, face_side=None, nose_tip=None, midline_offset=0):
         self.FaceAxis = face_axis
         self.FaceOrientation = face_orientation
+        self.FaceSide = face_side
         self.NoseTip = nose_tip
         self.MidlineOffset = midline_offset
+    
+    def copy(self):
+        return copy.deepcopy(self)
 
 class WhiskingFun:
     @staticmethod
@@ -70,8 +72,13 @@ class WhiskingFun:
                     midWidth = fp.NoseTip[0]
                 
                 # Broadcast image two halves into two arrays
-                image_halves = [vidFrame[:, :midWidth], vidFrame[:, midWidth:]]
-                image_side = ['Left', 'Right']
+                if fp.FaceOrientation == 'up':
+                    image_halves = [vidFrame[:, :midWidth], vidFrame[:, midWidth:]]
+                    image_side = ['Left', 'Right']
+                    
+                elif fp.FaceOrientation == 'down':
+                    image_halves = [vidFrame[:, midWidth:], vidFrame[:, :midWidth]]
+                    image_side = ['Right', 'Left']
 
             elif fp.FaceAxis == 'horizontal':
                 midWidth = round(vidFrame.shape[0] / 2)
@@ -80,21 +87,29 @@ class WhiskingFun:
                     midWidth = fp.NoseTip[1]
                 
                 # Get two half images
-                image_halves = [vidFrame[:midWidth, :], vidFrame[midWidth:, :]]
-                image_side = ['Top', 'Bottom']
+                if fp.FaceOrientation == 'right':
+                    image_halves = [vidFrame[:midWidth, :], vidFrame[midWidth:, :]]
+                    image_side = ['Top', 'Bottom']
+                elif fp.FaceOrientation == 'left':
+                    image_halves = [vidFrame[midWidth:, :], vidFrame[:midWidth, :]]
+                    image_side = ['Bottom', 'Top']
+
+            # By convention, always start with the left side of the face
+            face_side = ['Left', 'Right']
 
         else:
             image_halves = np.array([vidFrame])
             image_side = ['Full']
+            face_side = ['Unknown']
 
         # Get whisking parameters for each side, and save them to the WhiskingParams object
         # initialize values
-        wp = [WhiskingParams(None, None, None, fp), WhiskingParams(None, None, None, fp)]
-        for image, side, side_id in zip(image_halves, image_side, range(len(image_halves))):
-            wp[side_id] = WhiskingFun.find_whiskerpad(image, fp, image_side=side)           
-            wp[side_id].ImageSide = side
+        wp = [WhiskingParams(None, None, None), WhiskingParams(None, None, None)]
+        for image, f_side, im_side, side_id in zip(image_halves, face_side, image_side, range(len(image_halves))):
+            wp[side_id] = WhiskingFun.find_whiskerpad(image, fp, face_side=f_side, image_side=im_side)           
+            wp[side_id].ImageSide = im_side
             wp[side_id].ImageDimensions = image.shape
-            wp[side_id].FaceImageSide, wp[side_id].ProtractionDirection, wp[side_id].LinkingDirection = WhiskingFun.get_whisking_params(wp[side_id])
+            wp[side_id].ImageBorderAxis, wp[side_id].ProtractionDirection, wp[side_id].LinkingDirection = WhiskingFun.get_whisking_params(wp[side_id])
 
         return wp, splitUp
 
@@ -139,7 +154,7 @@ class WhiskingFun:
         return whiskingParams, splitUp
             
     @staticmethod
-    def find_whiskerpad(topviewImage, fp, image_side):
+    def find_whiskerpad(topviewImage, fp, face_side, image_side):
         
         contour=None
         while contour is None or len(contour) == 0:
@@ -200,29 +215,44 @@ class WhiskingFun:
                     # ending point is the point with the highest x value and lowest y value
                     ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
                 if contour_brightSide['maxSide'] == 'bottom':
-                    # starting point is the point with the lowest x value and highest y value
-                    starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
+                    # contour = np.fliplr(contour)
+                    # contour = np.flipud(contour)
+                    # starting point is the point with the highest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
                     # ending point is the point with the lowest x value and lowest y value
                     ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
             elif fp.FaceOrientation == 'right':
                 if contour_brightSide['maxSide'] == 'top':
-                    # starting point is the point with the highest x value and lowest y value
-                    starting_point = contour[contour[:, 0, 0].argmax(), 0, :]
-                    # ending point is the point with the lowest x value and lowest y value
-                    ending_point = contour[contour[:, 0, 0].argmin(), 0, :]
+                    contour = np.flipud(contour)
+                    # starting point is the point with the lowest x value and highest y value
+                    starting_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                    # ending point is the point with the highest x value and lowest y value
+                    ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
                 if contour_brightSide['maxSide'] == 'bottom':
-                    # starting point is the point with the highest x value and highest y value
-                    starting_point = contour[contour[:, 0, 0].argmin(), 0, :]
-                    # ending point is the point with the lowest x value and highest y value
-                    ending_point = contour[contour[:, 0, 1].argmax(), 0, :]
+                    # starting point is the point with the lowest x value and lowest y value
+                    starting_point = contour[contour[:, 0, 1].argmin(), 0, :]
+                    # ending point is the point with the highest x value and highest y value
+                    ending_point = contour[contour[:, 0, 0].argmax(), 0, :]
 
- 
         # Find the index of the starting point in the contour
         starting_point_index = np.where((contour == starting_point).all(axis=2))[0][0]
         # Find the index of the ending point in the contour
         ending_point_index = np.where((contour == ending_point).all(axis=2))[0][0]
+ 
+        if fp.FaceOrientation == 'up' or (fp.FaceOrientation == 'right' and contour_brightSide['maxSide'] == 'bottom'):
+            # add modulus contour length to starting point index
+            starting_point_index = starting_point_index + contour.shape[0]
+
+        # Make sure starting point index is smaller than ending point index
+        if starting_point_index > ending_point_index:
+            starting_point_index, ending_point_index = ending_point_index, starting_point_index
+
         # face contour is the part of the contour bounded by those indices
         face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
+
+        # Plot rotated contour face_contour_r
+        fig, ax = plt.subplots()
+        ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
 
         # Assuming a straight line between the starting point and the ending point,
         # we rotate the curve to set that line as the x-axis. We then find the highest y value 
@@ -231,9 +261,22 @@ class WhiskingFun:
         # Find the angle of the straight line
         theta = np.arctan((ending_point[1] - starting_point[1]) / (ending_point[0] - starting_point[0]))
 
-        # Rotate the contour by that angle
-        rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
-        face_contour_r = np.round(np.dot(face_contour - starting_point, rot) + starting_point)
+        if (fp.FaceOrientation == 'right' and contour_brightSide['maxSide'] == 'top') \
+            or (fp.FaceOrientation == 'left' and contour_brightSide['maxSide'] == 'bottom'):
+            # Rotate the contour by that angle minus pi, in the counter clockwise direction
+            rot = np.array([[np.cos(theta - np.pi), -np.sin(theta - np.pi)], [np.sin(theta - np.pi), np.cos(theta - np.pi)]])
+        else:
+            # Rotate the contour by angle, in the clockwise direction
+            rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+
+        if fp.FaceOrientation == 'down' or fp.FaceOrientation == 'left':
+            face_contour_r = np.round(np.dot(face_contour - starting_point, rot) + starting_point)
+        else:
+            face_contour_r = np.round(np.dot(starting_point - face_contour, rot) + starting_point)
+
+        # Plot rotated contour face_contour_r
+        fig, ax = plt.subplots()
+        ax.plot(face_contour_r[:, 0], face_contour_r[:, 1], linewidth=2, color='r')
 
         # Find the index of the highest y value on the rotated contour
         wpLocationIndex = face_contour_r[:, 1].argmax()
@@ -249,21 +292,27 @@ class WhiskingFun:
         ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
         plt.show()
 
+        # Add create fp object for that whiskerpad and face side
+        fp_wp = fp.copy()
+        fp_wp.FaceSide = face_side
+
         # if is within 1/3 of the image width from the nose tip (or midline), in the orthogonal direction of the head axis, keep it
         keep_wp_location = False
-        if fp.FaceAxis == 'vertical':
-                # Need to substract the original image midline when right side image
-                if fp.NoseTip[0] >= topviewImage.shape[1]:
-                    nose_tip_offset = topviewImage.shape[1]
+        if fp_wp.FaceAxis == 'vertical':
+                # Adjust nose tip coordinates if needed
+                if (fp_wp.FaceOrientation == 'down' and face_side == 'Left') or (fp_wp.FaceOrientation == 'up' and face_side == 'Right'):
+                    fp_wp.NoseTip[0] = 0
                 else:
-                    nose_tip_offset = 0
-                keep_wp_location = np.abs(wpLocation[0] - nose_tip_offset) < topviewImage.shape[1] / 3
-        elif fp.FaceAxis == 'horizontal':
-                if fp.NoseTip[1] >= topviewImage.shape[0]:
-                    nose_tip_offset = topviewImage.shape[0]
+                    fp_wp.NoseTip[0] = topviewImage.shape[1]
+                keep_wp_location = np.abs(wpLocation[0] - fp_wp.NoseTip[0]) < topviewImage.shape[1] / 3
+
+        elif fp_wp.FaceAxis == 'horizontal':
+                # Adjust nose tip coordinates if needed
+                if (fp_wp.FaceOrientation == 'left' and face_side == 'Left') or (fp_wp.FaceOrientation == 'right' and face_side == 'Right'):
+                    fp_wp.NoseTip[1] = 0
                 else:
-                    nose_tip_offset = 0
-                keep_wp_location = np.abs(wpLocation[1] - fp.NoseTip[1]) < topviewImage.shape[0] / 3
+                    fp_wp.NoseTip[1] = topviewImage.shape[0]
+                keep_wp_location = np.abs(wpLocation[1] - fp_wp.NoseTip[1]) < topviewImage.shape[0] / 3
                 
         if keep_wp_location:
             # Save the image with the contour overlayed and the whisker pad location labelled on it
@@ -279,18 +328,18 @@ class WhiskingFun:
         else:
             # Get ballpark whisker pad coordinates, according to nose tip, face_axis and face orientation
             # Define whiskerpad area (wpArea) as the rectangle around the nose tip, offset by some ratio towards the face
-            if fp.FaceAxis == 'vertical':
+            if fp_wp.FaceAxis == 'vertical':
                 wp_offset = [topviewImage.shape[1] / 8, topviewImage.shape[0] / 4]
-                if fp.FaceOrientation == 'up':
-                    wpArea = [fp.NoseTip[0] - wp_offset[0], fp.NoseTip[1] + wp_offset[1], wp_offset[0], wp_offset[1]]
-                elif fp.FaceOrientation == 'down':
-                    wpArea = [fp.NoseTip[0] - wp_offset[0], fp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
-            elif fp.FaceAxis == 'horizontal':
+                if fp_wp.FaceOrientation == 'up':
+                    wpArea = [fp_wp.NoseTip[0] - wp_offset[0], fp_wp.NoseTip[1] + wp_offset[1], wp_offset[0], wp_offset[1]]
+                elif fp_wp.FaceOrientation == 'down':
+                    wpArea = [fp_wp.NoseTip[0] - wp_offset[0], fp_wp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
+            elif fp_wp.FaceAxis == 'horizontal':
                 wp_offset = [topviewImage.shape[1] / 8, topviewImage.shape[0] / 4]
-                if fp.FaceOrientation == 'left':
-                    wpArea = [fp.NoseTip[0] + wp_offset[0], fp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
-                elif fp.FaceOrientation == 'right':
-                    wpArea = [fp.NoseTip[0] - wp_offset[0], fp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
+                if fp_wp.FaceOrientation == 'left':
+                    wpArea = [fp_wp.NoseTip[0] + wp_offset[0], fp_wp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
+                elif fp_wp.FaceOrientation == 'right':
+                    wpArea = [fp_wp.NoseTip[0] - wp_offset[0], fp_wp.NoseTip[1] - wp_offset[1], wp_offset[0], wp_offset[1]]
 
             # Define whisker pad location (wpLocation) as the center of the whisker pad area
             wpLocation = np.round([wpArea[0] + wpArea[2] / 2, wpArea[1] + wpArea[3] / 2])
@@ -306,7 +355,7 @@ class WhiskingFun:
         # ax.add_patch(wpAttributes)
         # plt.show()
 
-        whiskingParams = WhiskingParams(wpArea, wpLocation, wpRelativeLocation, fp)
+        whiskingParams = WhiskingParams(wpArea, wpLocation, wpRelativeLocation, fp_wp)
 
         return whiskingParams
 
@@ -381,15 +430,15 @@ class WhiskingFun:
     def get_whisking_params(wp):
 
         if wp.FaceAxis == 'horizontal':
-            faceImageSide = 'bottom' if wp.RelativeLocation[1] > 0.5 else 'top'
+            ImageBorderAxis = 'bottom' if wp.RelativeLocation[1] > 0.5 else 'top'
             protractionDirection = 'leftward' if wp.NoseTip[0] < wp.Location[0] else 'rightward'
         else:
-            faceImageSide = 'right' if wp.RelativeLocation[0] > 0.5 else 'left'
+            ImageBorderAxis = 'right' if wp.RelativeLocation[0] > 0.5 else 'left'
             protractionDirection = 'upward' if wp.NoseTip[1] < wp.Location[1] else 'downward'
 
         linkingDirection = 'rostral'
 
-        return faceImageSide, protractionDirection, linkingDirection
+        return ImageBorderAxis, protractionDirection, linkingDirection
 
     @staticmethod
     def RestrictToWhiskerPad(wData, whiskerpadCoords, ImageDim):
@@ -515,14 +564,17 @@ class WhiskingFun:
         cv2.imwrite(os.path.join(video_dir, 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
 
         # instanciate whiskparams with nose_tip, face_axis, face_orientation
-        face_params = FaceParams(face_axis, face_orientation, nose_tip, midline_offset)
+        face_params = FaceParams(face_axis, face_orientation, None , nose_tip, midline_offset)
 
         return face_params, initialFrame
 
     @staticmethod
-    def save_whiskerpad_params(whiskingParams, trackingDir):
-        # Save whiskerpad parameters to json file 
-        with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
+    def save_whiskerpad_params(whiskingParams, videofile):
+        trackingDir = os.path.dirname(videofile)
+        filename = os.path.basename(videofile).split('.')[0]
+        # Save whiskerpad parameters to json file named whiskerpad_{filename}.json
+        with open(os.path.join(trackingDir, 'whiskerpad_' + filename + '.json'), 'w') as file:
+        # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
             json.dump(whiskingParams, file, indent='\t', cls=WhiskingParamsEncoder)
 
         # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
@@ -541,11 +593,17 @@ if __name__ == '__main__':
 
     # Get whisking parameters
     if args.interactive:
-        whiskingParams, splitUp = WhiskingFun.draw_whiskerpad_roi(args.videofile, args.splitUp)
+        whiskerpadParams, splitUp = WhiskingFun.draw_whiskerpad_roi(args.videofile, args.splitUp)
     else:
-        whiskingParams, splitUp = WhiskingFun.get_whiskerpad_params(args.videofile, args.splitUp)
+        whiskerpadParams, splitUp = WhiskingFun.get_whiskerpad_params(args.videofile, args.splitUp)
+
+    # Create whiskerpadParams dictionary
+    whiskerpad = {'filename': os.path.basename(args.videofile),
+                        'directory': os.path.dirname(args.videofile), 
+                        'split': splitUp,
+                        'whiskerpads': whiskerpadParams}
 
     # Save whisking parameters to json file
-    WhiskingFun.save_whiskerpad_params(whiskingParams, video_dir)
+    WhiskingFun.save_whiskerpad_params(whiskerpad, args.videofile)
 
-    print(whiskingParams)
+    print(whiskerpad)
