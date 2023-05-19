@@ -28,6 +28,7 @@ class WhiskingParams:
         if fp is not None:
             self.FaceAxis = fp.FaceAxis
             self.FaceOrientation = fp.FaceOrientation
+            self.FaceSide = fp.FaceSide
             self.NoseTip = fp.NoseTip
             self.MidlineOffset = fp.MidlineOffset
         self.AreaCoordinates = wpArea
@@ -184,11 +185,11 @@ class WhiskingFun:
             contour = max(filteredContours, key=cv2.contourArea)
 
         # plot image, and overlay the contour on top
-        fig, ax = plt.subplots()
-        ax.imshow(topviewImage)
-        plt.title('Face contour')
-        ax.plot(contour[:, 0, 0], contour[:, 0, 1], linewidth=2, color='r')
-        plt.show()
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Face contour')
+        # ax.plot(contour[:, 0, 0], contour[:, 0, 1], linewidth=2, color='r')
+        # plt.show()
 
         contour_brightSide = WhiskingFun.get_side_brightness(opening, contour)
 
@@ -297,12 +298,12 @@ class WhiskingFun:
         wpLocation = face_contour[wpLocationIndex, :]
 
         # # Plot image and wpLocation on top
-        fig, ax = plt.subplots()
-        ax.imshow(topviewImage)
-        plt.title('Face contour')
-        ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
-        ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
-        plt.show()
+        # fig, ax = plt.subplots()
+        # ax.imshow(topviewImage)
+        # plt.title('Face contour')
+        # ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
+        # ax.plot(wpLocation[0], wpLocation[1], 'o', color='y')
+        # plt.show()
 
         # Add create fp object for that whiskerpad and face side
         fp_wp = fp.copy()
@@ -588,9 +589,6 @@ class WhiskingFun:
         with open(os.path.join(trackingDir, 'whiskerpad_' + filename + '.json'), 'w') as file:
         # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
             json.dump(whiskingParams, file, indent='\t', cls=WhiskingParamsEncoder)
-
-        # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
-        #     json.dump(whiskingParams, file, indent='\t')
 
 if __name__ == '__main__':
     # Parse arguments
