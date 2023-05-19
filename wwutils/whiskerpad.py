@@ -1,3 +1,15 @@
+"""whiskerpad.py
+Methods for extracting whisker pad coordinates from video files
+
+Part of the Whisker Tracking pipeline for analyzing rodent whisker data.
+Will likely be removed from this repository in the future.
+
+Author: Vincent Prevosto <prevosto@mit.edu>  
+Date  : 05/19/2023
+
+Use is subject to the MIT License (MIT)
+"""
+
 import os, sys
 import argparse
 import cv2
