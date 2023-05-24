@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.0',
+   version='1.1.1',
    author='',
    author_email='',
    packages=['WhiskiWrap','wwutils'],

@@ -1345,7 +1345,8 @@ class ChunkedTiffWriter:
                 self.chunk_name_pattern % self.frames_written)
 
             # Write it
-            tifffile.imsave(chunkname, chunk, compress=0)
+            # tifffile.imsave(chunkname, chunk, compress=0)
+            tifffile.imsave(chunkname, chunk, compression='jpeg', compressionargs={'level': 0}) # or try 'lzw'
 
             # Update the counter
             self.frames_written += len(self.frame_buffer)

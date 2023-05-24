@@ -21,8 +21,6 @@ import json
 import pandas as pd
 import copy
 
-video_dir = ""
-
 class WhiskingParams:
     def __init__(self, wpArea, wpLocation, wpRelativeLocation, fp=None):
         if fp is not None:
@@ -38,7 +36,7 @@ class WhiskingParams:
         self.ImageBorderAxis = None
         self.ProtractionDirection = None
         self.LinkingDirection = None
-        self.ImageDimensions = []
+        self.ImageCoordinates = []
 
 class WhiskingParamsEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -67,17 +65,24 @@ class FaceParams:
     
     def copy(self):
         return copy.deepcopy(self)
+    
+class Params:
+    def __init__(self, video_file, splitUp=False, interactive=False):
+        self.video_file = video_file
+        self.video_dir = os.path.dirname(video_file)
+        self.splitUp = splitUp
+        self.interactive = interactive
 
 class WhiskingFun:
     @staticmethod
-    def get_whiskerpad_params(videofile, splitUp=False):
-        fp, initialFrame = WhiskingFun.get_nose_tip_coordinates(videofile)
-        vidcap = cv2.VideoCapture(videofile)
+    def get_whiskerpad_params(args):
+        fp, initialFrame = WhiskingFun.get_nose_tip_coordinates(args.video_file, args.video_dir)
+        vidcap = cv2.VideoCapture(args.video_file)
         vidcap.set(cv2.CAP_PROP_POS_FRAMES, initialFrame)
         vidFrame = cv2.cvtColor(vidcap.read()[1], cv2.COLOR_BGR2GRAY)
         vidcap.release()
 
-        if splitUp:
+        if args.splitUp:
             if fp.FaceAxis == 'vertical':
                 midWidth = round(vidFrame.shape[1] / 2)
                 if midWidth - vidFrame.shape[1] / 8 < fp.NoseTip[0] < midWidth + vidFrame.shape[1] / 8:
@@ -119,30 +124,36 @@ class WhiskingFun:
         # initialize values
         wp = [WhiskingParams(None, None, None), WhiskingParams(None, None, None)]
         for image, f_side, im_side, side_id in zip(image_halves, face_side, image_side, range(len(image_halves))):
-            wp[side_id] = WhiskingFun.find_whiskerpad(image, fp, face_side=f_side, image_side=im_side)           
+            wp[side_id] = WhiskingFun.find_whiskerpad(image, fp, face_side=f_side, image_side=im_side, video_dir=args.video_dir)           
             wp[side_id].ImageSide = im_side
-            wp[side_id].ImageDimensions = image.shape
+            # Set image coordinates as a tuple of image coordinates x, y, width, height
+            if im_side == 'Left' or im_side == 'Top':
+                wp[side_id].ImageCoordinates = tuple([0, 0, image.shape[1], image.shape[0]])
+            elif im_side == 'Right':
+                    wp[side_id].ImageCoordinates = tuple([fp.NoseTip[0], 0, image.shape[1], image.shape[0]])
+            elif im_side == 'Bottom':
+                    wp[side_id].ImageCoordinates = tuple([0, fp.NoseTip[1], image.shape[1], image.shape[0]])
             wp[side_id].ImageBorderAxis, wp[side_id].ProtractionDirection, wp[side_id].LinkingDirection = WhiskingFun.get_whisking_params(wp[side_id])
 
-        return wp, splitUp
+        return wp, args.splitUp
 
     @staticmethod
-    def draw_whiskerpad_roi(vid, splitUp=None):
+    def draw_whiskerpad_roi(args):
         vidFrame = cv2.cvtColor(vid.read()[1], cv2.COLOR_BGR2GRAY)
         cv2.imshow("Video Frame", vidFrame)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-        if splitUp is None:
-            splitUp = input("Do you need to split the video? (Yes/No): ")
+        if args.splitUp is None:
+            args.splitUp = input("Do you need to split the video? (Yes/No): ")
 
-        if splitUp.lower() == "no":
+        if not args.splitUp:
             # Get whisker pad coordinates
             # Get whisking parameters
             # whiskingParams = WhiskingFun.get_whisking_params(vidFrame,interactive=True)
             wpCoordinates, wpLocation, wpRelativeLocation = WhiskingFun.find_whiskerpad_interactive(vidFrame)
             # Clear variables firstVideo
-        elif splitUp.lower() == "yes":
+        elif args.splitUp:
             whiskparams, initialFrame = WhiskingFun.get_nose_tip_coordinates(vid.Path, vid.Name)
             midWidth = round(vidFrame.shape[1] / 2)
             if midWidth - vidFrame.shape[1] / 8 < fp.NoseTip[0] < midWidth + vidFrame.shape[1] / 8:
@@ -164,10 +175,10 @@ class WhiskingFun:
             whiskingParams[0].ImageSide = 'Left'
             whiskingParams[1].ImageSide = 'Right'
 
-        return whiskingParams, splitUp
+        return whiskingParams, args.splitUp
             
     @staticmethod
-    def find_whiskerpad(topviewImage, fp, face_side, image_side):
+    def find_whiskerpad(topviewImage, fp, face_side, image_side, video_dir=None):
         
         contour=None
         while contour is None or len(contour) == 0:
@@ -264,8 +275,8 @@ class WhiskingFun:
         face_contour = contour[starting_point_index:ending_point_index+1, 0, :]
 
         # Plot rotated contour face_contour_r
-        fig, ax = plt.subplots()
-        ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
+        # fig, ax = plt.subplots()
+        # ax.plot(face_contour[:, 0], face_contour[:, 1], linewidth=2, color='r')
 
         # Assuming a straight line between the starting point and the ending point,
         # we rotate the curve to set that line as the x-axis. We then find the highest y value 
@@ -288,8 +299,8 @@ class WhiskingFun:
             face_contour_r = np.round(np.dot(starting_point - face_contour, rot) + starting_point)
 
         # Plot rotated contour face_contour_r
-        fig, ax = plt.subplots()
-        ax.plot(face_contour_r[:, 0], face_contour_r[:, 1], linewidth=2, color='r')
+        # fig, ax = plt.subplots()
+        # ax.plot(face_contour_r[:, 0], face_contour_r[:, 1], linewidth=2, color='r')
 
         # Find the index of the highest y value on the rotated contour
         wpLocationIndex = face_contour_r[:, 1].argmax()
@@ -328,12 +339,13 @@ class WhiskingFun:
                 keep_wp_location = np.abs(wpLocation[1] - fp_wp.NoseTip[1]) < topviewImage.shape[0] / 3
                 
         if keep_wp_location:
-            # Save the image with the contour overlayed and the whisker pad location labelled on it
-            image_with_contour = topviewImage.copy()
-            cv2.drawContours(image_with_contour, [face_contour], -1, (0, 255, 0), 3)
-            # define file name based on face orientation 
-            output_path = os.path.join(video_dir, 'whiskerpad_' + image_side.lower() + '.jpg')
-            cv2.imwrite(output_path, cv2.circle(image_with_contour, tuple(wpLocation), 10, (255, 0, 0), -1))
+            if video_dir is not None:
+                # Save the image with the contour overlayed and the whisker pad location labelled on it
+                image_with_contour = topviewImage.copy()
+                cv2.drawContours(image_with_contour, [face_contour], -1, (0, 255, 0), 3)
+                # define file name based on face orientation 
+                output_path = os.path.join(video_dir, 'whiskerpad_' + image_side.lower() + '.jpg')
+                cv2.imwrite(output_path, cv2.circle(image_with_contour, tuple(wpLocation), 10, (255, 0, 0), -1))
 
             # Define whisker pad area (wpArea) as the rectangle around the whisker pad location
             wpArea = [wpLocation[0] - 10, wpLocation[1] - 10, 20, 20]
@@ -505,7 +517,7 @@ class WhiskingFun:
         return contours
 
     @staticmethod
-    def get_nose_tip_coordinates(videoFileName):
+    def get_nose_tip_coordinates(videoFileName, video_dir=None):
         ## Using OpenCV
 
         # Open video file defined by videoDirectory, videoFileName 
@@ -573,8 +585,9 @@ class WhiskingFun:
         # Find the midline offset
         midline_offset = np.abs(nose_tip[0] - image.shape[1] / 2)
 
-        # Save the frame with the nose tip labelled on it
-        cv2.imwrite(os.path.join(video_dir, 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
+        if video_dir is not None:
+            # Save the frame with the nose tip labelled on it
+            cv2.imwrite(os.path.join(video_dir, 'nose_tip.jpg'), cv2.circle(image, tuple(nose_tip), 10, (255, 0, 0), -1))
 
         # instanciate whiskparams with nose_tip, face_axis, face_orientation
         face_params = FaceParams(face_axis, face_orientation, None , nose_tip, midline_offset)
@@ -582,38 +595,41 @@ class WhiskingFun:
         return face_params, initialFrame
 
     @staticmethod
-    def save_whiskerpad_params(whiskingParams, videofile):
-        trackingDir = os.path.dirname(videofile)
-        filename = os.path.basename(videofile).split('.')[0]
+    def save_whiskerpad_params(args, whiskerpadParams):
+        
+        trackingDir = args.video_dir
+
+        # Create whiskerpadParams dictionary
+        whiskerpad = {'filename': os.path.basename(args.video_file),
+                        'directory': trackingDir,
+                        'split': args.splitUp,
+                        'whiskerpads': whiskerpadParams}
+
+        filename = os.path.basename(args.video_file).split('.')[0]
+
         # Save whiskerpad parameters to json file named whiskerpad_{filename}.json
         with open(os.path.join(trackingDir, 'whiskerpad_' + filename + '.json'), 'w') as file:
-        # with open(os.path.join(trackingDir, 'whiskerpad.json'), 'w') as file:
-            json.dump(whiskingParams, file, indent='\t', cls=WhiskingParamsEncoder)
+            json.dump(whiskerpad, file, indent='\t', cls=WhiskingParamsEncoder)
+
+        return whiskerpad
 
 if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("videofile", help="Path to the video file")
+    parser.add_argument("video_file", help="Path to the video file")
     parser.add_argument("--splitUp", action="store_true", help="Flag to split the video")
     parser.add_argument("--interactive", action="store_true", help="Flag for interactive mode")
     args = parser.parse_args()
 
-    # assign value to global variable video_dir
-    video_dir = os.path.dirname(args.videofile)
+    wp=Params(args.video_file, args.splitUp, args.interactive)
 
     # Get whisking parameters
     if args.interactive:
-        whiskerpadParams, splitUp = WhiskingFun.draw_whiskerpad_roi(args.videofile, args.splitUp)
+        whiskerpadParams, splitUp = WhiskingFun.draw_whiskerpad_roi(wp)
     else:
-        whiskerpadParams, splitUp = WhiskingFun.get_whiskerpad_params(args.videofile, args.splitUp)
-
-    # Create whiskerpadParams dictionary
-    whiskerpad = {'filename': os.path.basename(args.videofile),
-                        'directory': os.path.dirname(args.videofile), 
-                        'split': splitUp,
-                        'whiskerpads': whiskerpadParams}
+        whiskerpadParams, splitUp = WhiskingFun.get_whiskerpad_params(wp)
 
     # Save whisking parameters to json file
-    WhiskingFun.save_whiskerpad_params(whiskerpad, args.videofile)
+    whiskerpad = WhiskingFun.save_whiskerpad_params(wp, whiskerpadParams)
 
     print(whiskerpad)
