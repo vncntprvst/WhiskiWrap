@@ -241,7 +241,7 @@ def smooth_and_plot_versus_depth(
         
         # Centers of layers (for naming)
         layer_depth_bins = np.concatenate(
-            [[-50], layer_boundaries, [1500]]).astype(np.float)
+            [[-50], layer_boundaries, [1500]]).astype(float)
         layer_centers = (layer_depth_bins[:-1] + layer_depth_bins[1:]) / 2.0
 
         # Adjust position of L2/3 and L6 slightly
@@ -312,7 +312,7 @@ def plot_by_depth_and_layer(df, column, combine_layer_5=True, aggregate='median'
     # Layer boundaries
     layer_boundaries = [128, 419, 626, 1006, 1366]
     layer_names = ['L1', 'L2/3', 'L4', 'L5', 'L6', 'L6b']
-    layer_depth_bins = np.concatenate([[-50], layer_boundaries, [1500]]).astype(np.float)
+    layer_depth_bins = np.concatenate([[-50], layer_boundaries, [1500]]).astype(float)
     layer_centers = (layer_depth_bins[:-1] + layer_depth_bins[1:]) / 2.0
     
     # Make a copy
