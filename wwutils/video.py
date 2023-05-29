@@ -413,9 +413,11 @@ def get_video_frame_rate(video_filename):
     
     return frame_rate
 
-def get_video_params(video_filename):
+def get_video_params(video_filename, crop=None):
     """Returns width, height, frame_rate of video using ffmpeg-python"""
-    
+    # if crop is not None:
+    #     width, height = crop[0], crop[1]
+    # else:
     width, height = get_video_aspect(video_filename)
     frame_rate = get_video_frame_rate(video_filename)
     return width, height, frame_rate

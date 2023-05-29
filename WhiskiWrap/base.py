@@ -811,6 +811,236 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         'tif_sorted_filenames': tif_sorted_filenames,
         }
 
+def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
+    sensitive=False,
+    chunk_size=200, chunk_name_pattern='chunk%08d.tif',
+    stop_after_frame=None, delete_tiffs=True,
+    timestamps_filename=None, monitor_video=None,
+    monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
+    h5_filename=None, frame_func=None,
+    n_trace_processes=4, expectedrows=1000000,
+    verbose=True, skip_stitch=False, face='right', split_coord=None
+    ):
+    """Read, write, and trace each chunk, one at a time.
+
+    This is an extension of interleaved_read_trace_and_measure for bilateral whisker tracking.
+    The function needs to be called twice, once for each side of the face. 
+
+    input_reader : Typically a PFReader or FFmpegReader
+    tiffs_to_trace_directory : Location to write the tiffs
+    sensitive: if False, use default. If True, lower MIN_SIGNAL
+    chunk_size : frames per chunk
+    chunk_name_pattern : how to name them
+    stop_after_frame : break early, for debugging
+    delete_tiffs : whether to delete tiffs after done tracing
+    timestamps_filename : Where to store the timestamps
+        Only vallid for PFReader input_reader
+    monitor_video : filename for a monitor video
+        If None, no monitor video will be written
+    monitor_video_kwargs : kwargs to pass to FFmpegWriter for monitor
+    write_monitor_ffmpeg_stderr_to_screen : whether to display
+        output from ffmpeg writing instance
+    h5_filename : hdf5 file to stitch whiskers information into
+    frame_func : function to apply to each frame
+        If 'invert', will apply 255 - frame
+    n_trace_processes : number of simultaneous trace processes
+    expectedrows : how to set up hdf5 file
+    verbose : verbose
+    skip_stitch : skip the stitching phase
+    face : 'left','right','top','bottom'
+    split_coord : coordinate to split the image at. If None, will split at the middle of the image, according to the face orientation
+
+    Returns: dict
+        trace_pool_results : result of each call to trace
+        monitor_ff_stderr, monitor_ff_stdout : results from monitor
+            video ffmpeg instance
+    """
+    ## Set up kwargs
+    if monitor_video_kwargs is None:
+        monitor_video_kwargs = {}
+
+    if frame_func == 'invert':
+        frame_func = lambda frame: 255 - frame
+
+    # Check commands
+    WhiskiWrap.utils.probe_needed_commands()
+
+    ## Initialize readers and writers
+    if verbose:
+        print("initalizing readers and writers")
+
+    # Tiff writer
+    ctw = WhiskiWrap.ChunkedTiffWriter(tiffs_to_trace_directory,
+        chunk_size=chunk_size, chunk_name_pattern=chunk_name_pattern)
+
+    # FFmpeg writer is initalized after first frame
+    ffw = None
+
+    # Setup the result file
+    if not skip_stitch:
+        setup_hdf5(h5_filename, expectedrows, measure=True)
+
+    # Copy the parameters files
+    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
+
+    ## Set up the worker pool
+    # Pool of trace workers
+    trace_pool = multiprocessing.Pool(n_trace_processes)
+
+    # Keep track of results
+    trace_pool_results = []
+    deleted_tiffs = []
+    def log_result(result):
+        trace_pool_results.append(result)
+
+    ## Iterate over chunks
+    out_of_frames = False
+    nframe = 0
+
+    # Init the iterator outside of the loop so that it persists
+    iter_obj = input_reader.iter_frames()
+
+    while not out_of_frames:
+        # Get a chunk of frames
+        if verbose:
+            print("loading chunk of frames starting with", nframe)
+        chunk_of_frames = []
+        for frame in iter_obj:
+            if frame_func is not None:
+                frame = frame_func(frame)
+            chunk_of_frames.append(frame)
+            nframe = nframe + 1
+            if stop_after_frame is not None and nframe >= stop_after_frame:
+                break
+            if len(chunk_of_frames) == chunk_size:
+                break
+
+        # Check if we ran out
+        if len(chunk_of_frames) != chunk_size:
+            out_of_frames = True
+
+        ## Write tiffs
+        # We do this synchronously to ensure that it happens before
+        # the trace starts
+        for frame in chunk_of_frames:
+            ctw.write(frame)
+
+        # Make sure the chunk was written, in case this is the last one
+        # and we didn't reach chunk_size yet
+        if len(chunk_of_frames) != chunk_size:
+            ctw._write_chunk()
+        assert ctw.count_unwritten_frames() == 0
+
+        # Figure out which tiff file was just generated
+        tif_filename = ctw.chunknames_written[-1]
+
+        ## Start trace
+        trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face),
+            callback=log_result)
+
+        ## Determine whether we can delete any tiffs
+        #~ if delete_tiffs:
+            #~ tiffs_to_delete = [
+                #~ tpres['video_filename'] for tpres in trace_pool_results
+                #~ if tpres['video_filename'] not in deleted_tiffs]
+            #~ for filename in tiffs_to_delete:
+                #~ if verbose:
+                    #~ print "deleting", filename
+                #~ os.remove(filename)
+
+        ## Start monitor encode
+        # This is also synchronous, otherwise the input buffer might fill up
+        if monitor_video is not None:
+            if ffw is None:
+                ffw = WhiskiWrap.FFmpegWriter(monitor_video,
+                    frame_width=frame.shape[1], frame_height=frame.shape[0],
+                    write_stderr_to_screen=write_monitor_ffmpeg_stderr_to_screen,
+                    **monitor_video_kwargs)
+            for frame in chunk_of_frames:
+                ffw.write(frame)
+
+        ## Determine if we should pause
+        while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+            print("waiting for tracing to catch up")
+            time.sleep(30)
+
+    ## Wait for trace to complete
+    if verbose:
+        print("done with reading and writing, just waiting for tracing")
+    # Tell it no more jobs, so close when done
+    trace_pool.close()
+
+    # Wait for everything to finish
+    trace_pool.join()
+
+    ## Error check the tifs that were processed
+    # Get the tifs we wrote, and the tifs we trace
+    written_chunks = sorted(ctw.chunknames_written)
+    traced_filenames = sorted([
+        res['video_filename'] for res in trace_pool_results])
+
+    # Check that they are the same
+    if not np.all(np.array(written_chunks) == np.array(traced_filenames)):
+        raise ValueError("not all chunks were traced")
+
+    ## Extract the chunk numbers from the filenames
+    # The tiffs have been written, figure out which they are
+    split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
+    # tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
+    #     '^chunk(\d+).tif$', split_traced_filenames, sort=False)
+    
+    # Replace the format specifier with (\d+) in the pattern
+    mod_chunk_name_pattern = re.sub(r'%\d+d', r'(\\d+)', chunk_name_pattern)
+    mod_chunk_name_pattern = '^' + mod_chunk_name_pattern + '$'
+    tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
+        mod_chunk_name_pattern, split_traced_filenames, sort=False)
+
+    # Replace the format specifier with %s in the pattern
+    tif_chunk_name_pattern = re.sub(r'%\d+d', r'%s', chunk_name_pattern)
+    tif_full_filenames = [
+        os.path.join(tiffs_to_trace_directory, tif_chunk_name_pattern % fns)
+        for fns in tif_file_number_strings]
+    
+    tif_file_numbers = list(map(int, tif_file_number_strings))
+    tif_ordering = np.argsort(tif_file_numbers)
+    tif_sorted_filenames = np.array(tif_full_filenames)[
+        tif_ordering]
+    tif_sorted_file_numbers = np.array(tif_file_numbers)[
+        tif_ordering]
+
+    # stitch
+    if not skip_stitch:
+        print("Stitching")
+        zobj = list(zip(tif_sorted_file_numbers, tif_sorted_filenames))
+        for chunk_start, chunk_name in zobj:
+            # Append each chunk to the hdf5 file
+            fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+            append_whiskers_to_hdf5(
+                whisk_filename=fn.whiskers,
+		        measurements_filename = fn.measurements,
+                h5_filename=h5_filename,
+                chunk_start=chunk_start)
+
+    # Finalize writers
+    ctw.close()
+    if ffw is not None:
+        ff_stdout, ff_stderr = ffw.close()
+    else:
+        ff_stdout, ff_stderr = None, None
+
+    # Also write timestamps as numpy file
+    if hasattr(input_reader, 'timestamps') and timestamps_filename is not None:
+        timestamps = np.concatenate(input_reader.timestamps)
+        assert len(timestamps) >= ctw.frames_written
+        np.save(timestamps_filename, timestamps[:ctw.frames_written])
+
+    return {'trace_pool_results': trace_pool_results,
+        'monitor_ff_stdout': ff_stdout,
+        'monitor_ff_stderr': ff_stderr,
+        'tif_sorted_file_numbers': tif_sorted_file_numbers,
+        'tif_sorted_filenames': tif_sorted_filenames,
+        }
+
 def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     sensitive=False,
     chunk_size=200, chunk_name_pattern='chunk%08d.tif',
@@ -1133,6 +1363,15 @@ def compress_pf_to_video(input_reader, chunk_size=200, stop_after_frame=None,
         'monitor_ff_stderr': ff_stderr,
     }
 
+def measure_chunk_star(args):
+    return measure_chunk(*args)
+
+def read_whiskers_hdf5_summary(filename):
+    """Reads and returns the `summary` table in an HDF5 file"""
+    with tables.open_file(filename) as fi:
+        summary = pandas.DataFrame.from_records(fi.root.summary.read())
+
+    return summary
 
 class PFReader:
     """Reads photonfocus modulated data stored in matlab files"""
@@ -1308,8 +1547,7 @@ class PFReader:
 
 class ChunkedTiffWriter:
     """Writes frames to a series of tiff stacks"""
-    def __init__(self, output_directory, chunk_size=200,
-        chunk_name_pattern='chunk%08d.tif'):
+    def __init__(self, output_directory, chunk_size=200, chunk_name_pattern='chunk%08d.tif', compress=False):
         """Initialize a new chunked tiff writer.
 
         output_directory : where to write the chunks
@@ -1320,6 +1558,7 @@ class ChunkedTiffWriter:
         self.output_directory = output_directory
         self.chunk_size = chunk_size
         self.chunk_name_pattern = chunk_name_pattern
+        self.compress = compress
 
         # Initialize counters so we know what frame and chunk we're on
         self.frames_written = 0
@@ -1345,8 +1584,10 @@ class ChunkedTiffWriter:
                 self.chunk_name_pattern % self.frames_written)
 
             # Write it
-            # tifffile.imsave(chunkname, chunk, compress=0)
-            tifffile.imsave(chunkname, chunk, compression='jpeg', compressionargs={'level': 0}) # or try 'lzw'
+            if self.compress:
+                tifffile.imsave(chunkname, chunk, compression='lzw')
+            else:
+                tifffile.imsave(chunkname, chunk, compression=False)
 
             # Update the counter
             self.frames_written += len(self.frame_buffer)
@@ -1366,7 +1607,7 @@ class ChunkedTiffWriter:
 class FFmpegReader:
     """Reads frames from a video file using ffmpeg process"""
     def __init__(self, input_filename, pix_fmt='gray', bufsize=10**9,
-        duration=None, start_frame_time=None, start_frame_number=None,
+        duration=None, start_frame_time=None, start_frame_number=None, crop=None,
         write_stderr_to_screen=False, vsync='drop'):
         """Initialize a new reader
 
@@ -1377,6 +1618,7 @@ class FFmpegReader:
         duration : duration of video to read (-t parameter)
         start_frame_time, start_frame_number : -ss parameter
             Parsed using wwutils.video.ffmpeg_frame_string
+        crop : crop the video using the ffmpeg crop filter. Format is width:height:x:y
         write_stderr_to_screen : if True, writes to screen, otherwise to
             /dev/null
         """
@@ -1384,7 +1626,7 @@ class FFmpegReader:
 
         # Get params
         self.frame_width, self.frame_height, self.frame_rate = \
-            wwutils.video.get_video_params(input_filename)
+            wwutils.video.get_video_params(input_filename, crop=crop)
 
         # Set up pix_fmt
         if pix_fmt == 'gray':
@@ -1406,11 +1648,18 @@ class FFmpegReader:
             command += [
                 '-ss', ss_string]
 
+        # Add input file
         command += [
             '-i', input_filename,
             '-vsync', vsync,
             '-f', 'image2pipe',
             '-pix_fmt', pix_fmt]
+        
+        # Add crop string. The crop argument is a list
+        if crop is not None:
+            self.crop = crop
+        #     command += [
+        #         '-vf', 'crop=%d:%d:%d:%d' % tuple(crop)]
 
         # Add duration string
         if duration is not None:
@@ -1451,20 +1700,30 @@ class FFmpegReader:
         while(True):
             raw_image = self.ffmpeg_proc.stdout.read(self.read_size_per_frame)
 
+            # For debugging: 
+            # if self.crop is not None:
+                # import matplotlib.pyplot as plt
+                # # plot raw image, full and cropped (cropp coordinates format is width:height:x:y)
+                # raw_image_full = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel))
+                # raw_image_cropped = raw_image_full[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0], :]
+                # plt.figure()
+                # plt.subplot(1,2,1)
+                # plt.imshow(raw_image_full)
+                # plt.subplot(1,2,2)
+                # plt.imshow(raw_image_cropped)
+                # plt.show()
+
             # check if we ran out of frames
             if len(raw_image) != self.read_size_per_frame:
                 self.leftover_bytes = raw_image
                 self.close()
                 return
 
-            # Convert to array
-            flattened_im = np.fromstring(raw_image, dtype='uint8')
-            if self.bytes_per_pixel == 1:
-                frame = flattened_im.reshape(
-                    (self.frame_height, self.frame_width))
+            # Convert to array, flatten and squeeze
+            if self.crop is None:
+                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()
             else:
-                frame = flattened_im.reshape(
-                    (self.frame_height, self.frame_width, self.bytes_per_pixel))
+                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0]]
 
             # Update
             self.n_frames_read = self.n_frames_read + 1
@@ -1550,14 +1809,3 @@ class FFmpegWriter:
         """Closes the ffmpeg process and returns stdout, stderr"""
         return self.ffmpeg_proc.communicate()
 
-
-def measure_chunk_star(args):
-    return measure_chunk(*args)
-
-
-def read_whiskers_hdf5_summary(filename):
-    """Reads and returns the `summary` table in an HDF5 file"""
-    with tables.open_file(filename) as fi:
-        summary = pandas.DataFrame.from_records(fi.root.summary.read())
-
-    return summary
