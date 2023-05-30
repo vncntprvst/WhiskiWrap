@@ -204,7 +204,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
     Returns:
         stdout, stderr
     """
-    print(("Starting", video_filename))
+    print("Starting", video_filename)
 
     orig_dir = os.getcwd()
     run_dir, raw_video_filename = os.path.split(os.path.abspath(video_filename))
@@ -224,7 +224,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
         raise
     finally:
         os.chdir(orig_dir)
-    print(("Done", video_filename))
+    print("Done", video_filename)
 
     if not os.path.exists(whiskers_file):
         print(raw_video_filename)
@@ -245,7 +245,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
         raise
     finally:
         os.chdir(orig_dir)
-    print(("Done", whiskers_file))
+    print("Done", whiskers_file)
 
     if not os.path.exists(measurements_file):
         print(whiskers_file)
@@ -732,7 +732,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         ## Determine if we should pause
         while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
             print("waiting for tracing to catch up")
-            time.sleep(30)
+            time.sleep(10)
 
     ## Wait for trace to complete
     if verbose:
@@ -819,7 +819,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
     h5_filename=None, frame_func=None,
     n_trace_processes=4, expectedrows=1000000,
-    verbose=True, skip_stitch=False, face='right', split_coord=None
+    verbose=True, skip_stitch=False, face='right', classify=False
     ):
     """Read, write, and trace each chunk, one at a time.
 
@@ -848,7 +848,6 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     verbose : verbose
     skip_stitch : skip the stitching phase
     face : 'left','right','top','bottom'
-    split_coord : coordinate to split the image at. If None, will split at the middle of the image, according to the face orientation
 
     Returns: dict
         trace_pool_results : result of each call to trace
@@ -862,12 +861,21 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     if frame_func == 'invert':
         frame_func = lambda frame: 255 - frame
 
+    if frame_func == 'fliph':
+        frame_func = lambda frame: np.fliplr(frame)
+    elif frame_func == 'flipv':
+        frame_func = lambda frame: np.flipud(frame)
+
+    if frame_func == 'crop':
+        crop_coord=input_reader.crop
+        frame_func = lambda frame: frame[crop_coord[0]:crop_coord[1],crop_coord[2]:crop_coord[3]]
+
     # Check commands
     WhiskiWrap.utils.probe_needed_commands()
 
     ## Initialize readers and writers
     if verbose:
-        print("initalizing readers and writers")
+        print("Initalizing readers and writers")
 
     # Tiff writer
     ctw = WhiskiWrap.ChunkedTiffWriter(tiffs_to_trace_directory,
@@ -903,7 +911,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     while not out_of_frames:
         # Get a chunk of frames
         if verbose:
-            print("loading chunk of frames starting with", nframe)
+            print("Loading chunk of frames starting with", nframe)
         chunk_of_frames = []
         for frame in iter_obj:
             if frame_func is not None:
@@ -960,13 +968,19 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 ffw.write(frame)
 
         ## Determine if we should pause
-        while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
-            print("waiting for tracing to catch up")
-            time.sleep(30)
+        if len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+            print("Waiting for tracing to catch up")
+            #initialize time counter
+            wait_t0 = time.time()
+            while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+                # print dot every second
+                if time.time() - wait_t0 > 1:
+                    print('.', end='')
+            print("")
 
     ## Wait for trace to complete
     if verbose:
-        print("done with reading and writing, just waiting for tracing")
+        print("Done with reading and writing, just waiting for tracing")
     # Tell it no more jobs, so close when done
     trace_pool.close()
 
@@ -981,13 +995,11 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     # Check that they are the same
     if not np.all(np.array(written_chunks) == np.array(traced_filenames)):
-        raise ValueError("not all chunks were traced")
+        raise ValueError("Not all chunks were traced")
 
     ## Extract the chunk numbers from the filenames
     # The tiffs have been written, figure out which they are
     split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
-    # tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
-    #     '^chunk(\d+).tif$', split_traced_filenames, sort=False)
     
     # Replace the format specifier with (\d+) in the pattern
     mod_chunk_name_pattern = re.sub(r'%\d+d', r'(\\d+)', chunk_name_pattern)
@@ -1191,7 +1203,7 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
         ## Determine if we should pause
         while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
             print("waiting for tracing to catch up")
-            time.sleep(30)
+            time.sleep(10)
 
     ## Wait for trace to complete
     if verbose:
@@ -1722,10 +1734,10 @@ class FFmpegReader:
                 return
 
             # Convert to array, flatten and squeeze
-            if self.crop is None:
-                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()
-            else:
-                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0]]
+            # if self.crop is None:
+            frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()
+            # else:
+                # frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0]]
 
             # Update
             self.n_frames_read = self.n_frames_read + 1
