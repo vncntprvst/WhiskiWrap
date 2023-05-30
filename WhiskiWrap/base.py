@@ -867,8 +867,11 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         frame_func = lambda frame: np.flipud(frame)
 
     if frame_func == 'crop':
-        crop_coord=input_reader.crop
-        frame_func = lambda frame: frame[crop_coord[0]:crop_coord[1],crop_coord[2]:crop_coord[3]]
+        crop_coord = input_reader.crop
+        # crop_coord format is width:height:x:y
+        frame_func = lambda frame: frame[crop_coord[3]:crop_coord[3] + crop_coord[1], crop_coord[2]:crop_coord[2] + crop_coord[0]]
+        # reset crop field to None
+        input_reader.crop = None
 
     # Check commands
     WhiskiWrap.utils.probe_needed_commands()
@@ -968,15 +971,18 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 ffw.write(frame)
 
         ## Determine if we should pause
-        if len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
-            print("Waiting for tracing to catch up")
-            #initialize time counter
-            wait_t0 = time.time()
-            while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
-                # print dot every second
-                if time.time() - wait_t0 > 1:
-                    print('.', end='')
-            print("")
+        # if len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+        #     print("Waiting for tracing to catch up")
+        #     #initialize time counter
+        #     wait_t0 = time.time()
+        #     while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+        #         # print dot every second
+        #         if time.time() - wait_t0 > 1:
+        #             print('.', end='')
+            # print("")
+        while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
+            print("waiting for tracing to catch up")
+            time.sleep(5)
 
     ## Wait for trace to complete
     if verbose:
@@ -1714,7 +1720,6 @@ class FFmpegReader:
         while(True):
             raw_image = self.ffmpeg_proc.stdout.read(self.read_size_per_frame)
 
-            # For debugging: 
             # if self.crop is not None:
                 # import matplotlib.pyplot as plt
                 # # plot raw image, full and cropped (cropp coordinates format is width:height:x:y)
@@ -1733,11 +1738,11 @@ class FFmpegReader:
                 self.close()
                 return
 
-            # Convert to array, flatten and squeeze
-            # if self.crop is None:
-            frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()
-            # else:
-                # frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0]]
+            # Convert to array, flatten and squeeze (and crop if required, although it is slightly faster to crop in the calling function with frame_func)
+            if self.crop is None:
+                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()
+            else:
+                frame = np.frombuffer(raw_image, dtype='uint8').reshape((self.frame_height, self.frame_width, self.bytes_per_pixel)).squeeze()[self.crop[3]:self.crop[3]+self.crop[1], self.crop[2]:self.crop[2]+self.crop[0]]
 
             # Update
             self.n_frames_read = self.n_frames_read + 1
