@@ -1658,6 +1658,8 @@ class FFmpegReader:
         # Add crop string. The crop argument is a list
         if crop is not None:
             self.crop = crop
+        else:
+            self.crop = None
         #     command += [
         #         '-vf', 'crop=%d:%d:%d:%d' % tuple(crop)]
 
