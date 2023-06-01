@@ -79,32 +79,33 @@ def copy_parameters_files(target_directory, sensitive=False):
         'line.detectorbank'))
 
 class WhiskerSeg(tables.IsDescription):
-    time = tables.UInt32Col()
-    id = tables.UInt16Col()
+    fid = tables.UInt32Col()
+    wid = tables.UInt16Col()
     tip_x = tables.Float32Col()
     tip_y = tables.Float32Col()
-    fol_x = tables.Float32Col()
-    fol_y = tables.Float32Col()
-    pixlen = tables.UInt16Col()
+    follicle_x = tables.Float32Col()
+    follicle_y = tables.Float32Col()
+    pixel_length = tables.UInt16Col()
     chunk_start = tables.UInt32Col()
 
 class WhiskerSeg_measure(tables.IsDescription):
-    time = tables.UInt32Col()
-    id = tables.UInt16Col()
+    fid = tables.UInt32Col()
+    wid = tables.UInt16Col()
     tip_x = tables.Float32Col()
     tip_y = tables.Float32Col()
-    fol_x = tables.Float32Col()
-    fol_y = tables.Float32Col()
-    pixlen = tables.UInt16Col()
+    follicle_x = tables.Float32Col()
+    follicle_y = tables.Float32Col()
+    pixel_length = tables.UInt16Col()
     length = tables.Float32Col()
     score = tables.Float32Col()
     angle = tables.Float32Col()
     curvature = tables.Float32Col()
     chunk_start = tables.UInt32Col()
-    # Adding missing fields:
+    # Adding previous missing fields label, face_x, face_y:
     label = tables.UInt16Col()
-    face_x = tables.UInt16Col()
-    face_y = tables.UInt16Col()
+    # face_x and face_y are signed integers as the face location assigned by measure may be outside the frame
+    face_x = tables.Int32Col()
+    face_y = tables.Int32Col()
 
 def write_chunk(chunk, chunkname, directory='.'):
     tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
@@ -296,7 +297,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
 
     The HDF5 file will have two basic components:
         /summary : A table with the following columns:
-            time, id, fol_x, fol_y, tip_x, tip_y, pixlen
+            fid, wid, follicle_x, follicle_y, tip_x, tip_y, pixel_length
             These are all directly taken from the whisk file
         /pixels_x : A vlarray of the same length as summary but with the
             entire array of x-coordinates of each segment.
@@ -336,10 +337,10 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
         for whisker_id, wseg in list(frame_whiskers.items()):
             # Write to the table
             h5seg['chunk_start'] = chunk_start
-            h5seg['time'] = wseg.time + chunk_start
-            h5seg['id'] = wseg.id
-            h5seg['fol_x'] = wseg.x[-1]
-            h5seg['fol_y'] = wseg.y[-1]
+            h5seg['fid'] = wseg.time + chunk_start
+            h5seg['wid'] = wseg.id
+            h5seg['follicle_x'] = wseg.x[-1]
+            h5seg['follicle_y'] = wseg.y[-1]
             h5seg['tip_x'] = wseg.x[0]
             h5seg['tip_y'] = wseg.y[0]
 
@@ -348,9 +349,9 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
                 h5seg['score'] = measurements[measurements_idx][4]
                 h5seg['angle'] = measurements[measurements_idx][5]
                 h5seg['curvature'] = measurements[measurements_idx][6]
-                h5seg['pixlen'] = len(wseg.x)
-                h5seg['fol_x'] = measurements[measurements_idx][7]
-                h5seg['fol_y'] = measurements[measurements_idx][8]
+                h5seg['pixel_length'] = len(wseg.x)
+                h5seg['follicle_x'] = measurements[measurements_idx][7]
+                h5seg['follicle_y'] = measurements[measurements_idx][8]
                 h5seg['tip_x'] = measurements[measurements_idx][9]
                 h5seg['tip_y'] = measurements[measurements_idx][10]
                 h5seg['label'] = 0
