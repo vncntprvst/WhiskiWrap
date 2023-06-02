@@ -192,7 +192,7 @@ def measure_chunk(whiskers_filename, face, delete_when_done=False):
 
     return {'whiskers_filename': whiskers_filename, 'stdout': stdout, 'stderr': stderr}
 
-def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'):
+def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right', classify=False):
     """Run trace on an input file
 
     First we create a whiskers filename from `video_filename`, which is
@@ -251,6 +251,34 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
     if not os.path.exists(measurements_file):
         print(whiskers_file)
         raise IOError("measuring seems to have failed")
+    
+    # Run classify / re-classify:
+    if classify:
+        measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
+        classify_command = ['classify', measurements_file, measurements_file, face, '--px2mm', '0.04', '-n', '3']
+        reclassify_command = ['reclassify', measurements_file, measurements_file, '-n', '3']
+
+        os.chdir(run_dir)
+        try:
+            classify_pipe = subprocess.Popen(classify_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                )
+            stdout, stderr = classify_pipe.communicate()
+            reclassify_pipe = subprocess.Popen(reclassify_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                )
+            stdout, stderr = reclassify_pipe.communicate()
+        except:
+            raise
+        finally:
+            os.chdir(orig_dir)
+        print("Done", measurements_file)
+
+        if not os.path.exists(measurements_file):
+            print(measurements_file)
+            raise IOError("classify seems to have failed")
 
     # Clean up:
     if delete_when_done:
@@ -314,13 +342,67 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     print(whisk_filename)
 
     whiskers = wfile_io.Load_Whiskers(whisk_filename)
+    # whiskers is a list of dictionaries, each dictionary is a frame, each frame has a dictionary of whiskers
+    # len(whiskers) is = to chunk_size (which is a number of frames)
+
     nwhisk = np.sum(list(map(len, list(whiskers.values()))))
 
     if measurements_filename is not None:
         print(measurements_filename)
         M = MeasurementsTable(str(measurements_filename))
         measurements = M.asarray()
+        # len(measurements) is = to number of whiskers in those frames = chunk_size * n whiskers per frame
+
         measurements_idx = 0
+
+        # If `classify` was run on the measurements file, then the index of the individual whiskers will have changed
+        # Basically, the order of measurements is scrambled with respect to wseg.
+        # Also, some whiskers may have been removed.
+        # So we need to match wseg.id to measurements[2]
+
+        # First check whether classify was run on the measurements file, by comparing whisker ids in the first frame
+        # of the whiskers dictionary to the whisker ids in the measurements array
+
+        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
+        initial_frame_measurements = measurements[:len(wid_from_trace)]
+        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
+
+        if np.array_equal(wid_from_trace, wid_from_measure):
+            print("classify was run on the measurements file")
+
+            # We get all the whisker ids from the whiskers dictionary. Since ids are not unique (they repeat for each frame),
+            # we also get the frame number, to get a unique set of identifiers. 
+            whisker_id_set = [] 
+            for frame, frame_whiskers in list(whiskers.items()):
+                for whisker_id, wseg in list(frame_whiskers.items()):
+                    whisker_id_set.append([frame, wseg.id])
+
+            # Then, get all the same data from the measurements dictionary (converting to int)
+            measurement_ids = []
+            for measurement in measurements:
+                measurement_ids.append([int(measurement[1]), int(measurement[2])])
+
+            # Now, match the whisker ids from the whiskers dictionary to the whisker ids from the measurements dictionary
+            # This is done by matching the frame number and the whisker id
+            # The result is a list of indices that can be used to index the measurements array
+            measurements_idx = []
+            for whisker_id in whisker_id_set:
+                for idx, measurement_id in enumerate(measurement_ids):
+                    if measurement_id == whisker_id:
+                        measurements_idx.append(idx)
+                        break
+                # if the whisker was not found in the measurements array, then it was removed by classify
+                # so we add a -1 to the measurements_idx list
+                if measurement_id != whisker_id:
+                    measurements_idx.append(-1)
+
+            # Find the indices of the measurements that are -1
+            removed_idx = [i for i, x in enumerate(measurements_idx) if x == -1]
+            print("Number of whiskers removed by classify: ", len(removed_idx))
+
+            # Now, we can index the measurements array using the indices in measurements_idx
+            # measurements[measurements_idx] will return a list of measurements for each whisker
+            measurements = measurements[measurements_idx]
 
     # Open file
     h5file = tables.open_file(h5_filename, mode="a")
@@ -339,10 +421,6 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             h5seg['chunk_start'] = chunk_start
             h5seg['fid'] = wseg.time + chunk_start
             h5seg['wid'] = wseg.id
-            h5seg['follicle_x'] = wseg.x[-1]
-            h5seg['follicle_y'] = wseg.y[-1]
-            h5seg['tip_x'] = wseg.x[0]
-            h5seg['tip_y'] = wseg.y[0]
 
             if measurements_filename is not None:
                 h5seg['length'] = measurements[measurements_idx][3]
@@ -360,10 +438,18 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
 
                 measurements_idx += 1
 
+            else:
+                h5seg['follicle_x'] = wseg.x[-1]
+                h5seg['follicle_y'] = wseg.y[-1]
+                h5seg['tip_x'] = wseg.x[0]
+                h5seg['tip_y'] = wseg.y[0]
+
+                
+
             assert len(wseg.x) == len(wseg.y)
             h5seg.append()
 
-            # Write x
+            # Write whisker contour x and y pixel values
             xpixels_vlarray.append(wseg.x)
             ypixels_vlarray.append(wseg.y)
 
@@ -849,6 +935,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     verbose : verbose
     skip_stitch : skip the stitching phase
     face : 'left','right','top','bottom'
+    classify : if True, classify whiskers. Currently, using default px2mm = 0.05
 
     Returns: dict
         trace_pool_results : result of each call to trace
@@ -947,7 +1034,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         tif_filename = ctw.chunknames_written[-1]
 
         ## Start trace
-        trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face),
+        trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify),
             callback=log_result)
 
         ## Determine whether we can delete any tiffs

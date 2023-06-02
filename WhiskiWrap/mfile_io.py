@@ -8,7 +8,7 @@ All rights reserved.
 Use is subject to Janelia Farm Research Campus Software Copyright 1.1
 license terms (http://license.janelia.org/license/jfrc_copyright_1_1.html).
 
-Moved to WhiskiWrap repository by Vincent Prevosto, 05/2023
+Added to WhiskiWrap repository by Vincent Prevosto, 05/2023
 """
 import os,sys
 from ctypes import *
