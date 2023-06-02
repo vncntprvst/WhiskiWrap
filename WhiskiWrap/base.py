@@ -367,7 +367,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
         initial_frame_measurements = measurements[:len(wid_from_trace)]
         wid_from_measure = initial_frame_measurements[:, 2].astype(int)
 
-        if np.array_equal(wid_from_trace, wid_from_measure):
+        if not np.array_equal(wid_from_trace, wid_from_measure):
             print("classify was run on the measurements file")
 
             # We get all the whisker ids from the whiskers dictionary. Since ids are not unique (they repeat for each frame),
@@ -385,24 +385,23 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             # Now, match the whisker ids from the whiskers dictionary to the whisker ids from the measurements dictionary
             # This is done by matching the frame number and the whisker id
             # The result is a list of indices that can be used to index the measurements array
-            measurements_idx = []
+            measurements_reidx = []
             for whisker_id in whisker_id_set:
                 for idx, measurement_id in enumerate(measurement_ids):
                     if measurement_id == whisker_id:
-                        measurements_idx.append(idx)
+                        measurements_reidx.append(idx)
                         break
                 # if the whisker was not found in the measurements array, then it was removed by classify
-                # so we add a -1 to the measurements_idx list
+                # so we add a -1 to the measurements_reidx list
                 if measurement_id != whisker_id:
-                    measurements_idx.append(-1)
+                    measurements_reidx.append(-1)
 
             # Find the indices of the measurements that are -1
-            removed_idx = [i for i, x in enumerate(measurements_idx) if x == -1]
+            removed_idx = [i for i, x in enumerate(measurements_reidx) if x == -1]
             print("Number of whiskers removed by classify: ", len(removed_idx))
 
-            # Now, we can index the measurements array using the indices in measurements_idx
-            # measurements[measurements_idx] will return a list of measurements for each whisker
-            measurements = measurements[measurements_idx]
+            # Now, we can index the measurements array using the indices in measurements_reidx
+            measurements = measurements[measurements_reidx]
 
     # Open file
     h5file = tables.open_file(h5_filename, mode="a")
