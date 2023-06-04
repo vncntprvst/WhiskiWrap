@@ -192,7 +192,7 @@ def measure_chunk(whiskers_filename, face, delete_when_done=False):
 
     return {'whiskers_filename': whiskers_filename, 'stdout': stdout, 'stderr': stderr}
 
-def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right', classify=False):
+def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right', classify=None):
     """Run trace on an input file
 
     First we create a whiskers filename from `video_filename`, which is
@@ -253,10 +253,12 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
         raise IOError("measuring seems to have failed")
     
     # Run classify / re-classify:
-    if classify:
+    # typical classify arguments are {'px2mm': '0.04', 'n_whiskers': '3'}
+    if classify is not None:
         measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
-        classify_command = ['classify', measurements_file, measurements_file, face, '--px2mm', '0.04', '-n', '3']
-        reclassify_command = ['reclassify', measurements_file, measurements_file, '-n', '3']
+        classify_command = ['classify', measurements_file, measurements_file, 
+                            face, '--px2mm', classify['px2mm'], '-n', classify['n_whiskers']]
+        reclassify_command = ['reclassify', measurements_file, measurements_file, '-n', classify['n_whiskers']]
 
         os.chdir(run_dir)
         try:
@@ -905,7 +907,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
     h5_filename=None, frame_func=None,
     n_trace_processes=4, expectedrows=1000000,
-    verbose=True, skip_stitch=False, face='right', classify=False
+    verbose=True, skip_stitch=False, face='right', classify=None
     ):
     """Read, write, and trace each chunk, one at a time.
 
@@ -934,7 +936,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     verbose : verbose
     skip_stitch : skip the stitching phase
     face : 'left','right','top','bottom'
-    classify : if True, classify whiskers. Currently, using default px2mm = 0.05
+    classify : if not None, classify whiskers.
 
     Returns: dict
         trace_pool_results : result of each call to trace
