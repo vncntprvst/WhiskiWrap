@@ -12,6 +12,15 @@ setup(
    license='LICENSE.txt',
    description='Whisk package wrapper created by cxrodgers',
    long_description=open('README.md').read(),
-   install_requires=['tables>=3.5.1','pandas','MediaInfo'],
+   install_requires=[
+      'tables>=3.5.1',
+      'pandas',
+      'MediaInfo',
+      'future',
+      'tifffile',
+      'imagecodecs',
+      'ffmpeg-python>=0.2.0',
+      'whisk @ git+https://github.com/vncntprvst/whisk.git'
+      ],
    include_package_data=True,
 )
