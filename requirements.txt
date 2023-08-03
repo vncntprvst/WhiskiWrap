@@ -1,0 +1,9 @@
+# Requirements
+pandas
+MediaInfo
+future
+tables >= 3.5.1
+tifffile
+imagecodecs
+ffmpeg-python >= 0.2.0
+whisk @ git+https://github.com/vncntprvst/whisk.git
