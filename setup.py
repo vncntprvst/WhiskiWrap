@@ -19,8 +19,9 @@ setup(
       'future',
       'tifffile',
       'imagecodecs',
+      'statsmodels',
       'ffmpeg-python>=0.2.0',
-      'whisk @ git+https://github.com/vncntprvst/whisk.git'
+      'whisk-janelia'
       ],
    include_package_data=True,
 )
