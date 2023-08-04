@@ -23,21 +23,47 @@ import warnings
 import pdb
 from functools import reduce
 
-dllpath = os.path.split(os.path.abspath(__file__))[0]
+# Check if WHISKPATH is set in environment variables
+whisk_bin_path = os.environ.get('WHISKPATH', None)
+
+# if not whisk_bin_path:
+#     # You can set a default path here if desired, or raise an error.
+#     raise EnvironmentError("WHISKPATH environment variable not set!")
+
 if sys.platform == 'win32':
-  lib = os.path.join(dllpath,'whisk.dll')
+    lib = os.path.join(whisk_bin_path, 'whisk.dll')
 else:
-  lib = os.path.join(dllpath,'libwhisk.so')
-os.environ['PATH']+=os.pathsep + os.pathsep.join(['.','..',dllpath])
+    lib = os.path.join(whisk_bin_path, 'libwhisk.so')
+
+# No need to append to PATH if you're directly specifying the path to the library.
 name = find_library('whisk')
 if not name:
-  name=lib
+    name = lib
+
 try:
-  cWhisk = cdll.LoadLibrary( name )
+    cWhisk = cdll.LoadLibrary(name)
 except:
-  raise ImportError("Can not load whisk shared library"); 
-if cWhisk._name==None:
-  raise ImportError("Can not load whisk shared library");
+    raise ImportError("Cannot load whisk shared library")
+
+if cWhisk._name is None:
+    raise ImportError("Cannot load whisk shared library")
+
+
+# dllpath = os.path.split(os.path.abspath(__file__))[0]
+# if sys.platform == 'win32':
+#   lib = os.path.join(dllpath,'whisk.dll')
+# else:
+#   lib = os.path.join(dllpath,'libwhisk.so')
+# os.environ['PATH']+=os.pathsep + os.pathsep.join(['.','..',dllpath])
+# name = find_library('whisk')
+# if not name:
+#   name=lib
+# try:
+#   cWhisk = cdll.LoadLibrary( name )
+# except:
+#   raise ImportError("Can not load whisk shared library"); 
+# if cWhisk._name==None:
+#   raise ImportError("Can not load whisk shared library");
 
 _param_file = "default.parameters"
 if cWhisk.Load_Params_File(_param_file)==1: #returns 0 on success, 1 on failure

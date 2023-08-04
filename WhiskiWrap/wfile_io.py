@@ -24,18 +24,38 @@ from numpy import zeros, float32, uint8, array, hypot, arctan2, pi, concatenate,
 from numpy import where, cos, sin, sum
 from warnings import warn
 
+import whisk
 import pdb
 
-dllpath = os.path.split(os.path.abspath(__file__))[0]
+# Find the base directory of the whisk package
+whisk_base_dir = os.path.dirname(whisk.__file__)
+
 if sys.platform == 'win32':
-  lib = os.path.join(dllpath,'whisk.dll')
+    lib = os.path.join(whisk_base_dir, 'bin', 'whisk.dll')
 else:
-  lib = os.path.join(dllpath,'libwhisk.so')
-os.environ['PATH']+=os.pathsep + os.pathsep.join(['.','..',dllpath])
+    lib = os.path.join(whisk_base_dir, 'bin', 'libwhisk.so')
+    
+os.environ['PATH'] += os.pathsep + os.pathsep.join(['.', '..', whisk_base_dir])
 name = find_library('whisk')
+
 if not name:
-  name=lib
+    name = lib
+
 cWhisk = CDLL(name)
+
+# Set WHISKPATH environment variable to whisk/bin
+os.environ['WHISKPATH'] = os.path.join(whisk_base_dir, 'bin')
+
+# dllpath = os.path.split(os.path.abspath(__file__))[0]
+# if sys.platform == 'win32':
+#   lib = os.path.join(dllpath,'whisk.dll')
+# else:
+#   lib = os.path.join(dllpath,'libwhisk.so')
+# os.environ['PATH']+=os.pathsep + os.pathsep.join(['.','..',dllpath])
+# name = find_library('whisk')
+# if not name:
+#   name=lib
+# cWhisk = CDLL(name)
 
 _param_file = "default.parameters"
 if cWhisk.Load_Params_File(_param_file)==1: #returns 0 on success, 1 on failure
