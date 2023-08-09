@@ -25,21 +25,24 @@ from numpy import where, cos, sin, sum
 from warnings import warn
 
 import whisk
-import pdb
+# import pdb
 
 # Find the base directory of the whisk package
 whisk_base_dir = os.path.dirname(whisk.__file__)
+whisk_bin_dir = os.path.join(whisk_base_dir, 'bin')
 
 if sys.platform == 'win32':
-    lib = os.path.join(whisk_base_dir, 'bin', 'whisk.dll')
+    lib = os.path.join(whisk_bin_dir, 'libwhisk.dll')
 else:
-    lib = os.path.join(whisk_base_dir, 'bin', 'libwhisk.so')
+    lib = os.path.join(whisk_bin_dir, 'libwhisk.so')
     
-os.environ['PATH'] += os.pathsep + os.pathsep.join(['.', '..', whisk_base_dir])
-name = find_library('whisk')
+# Append both whisk base directory and bin directory to PATH
+os.environ['PATH'] += os.pathsep + os.pathsep.join(['.', '..', whisk_base_dir, whisk_bin_dir])
+os.add_dll_directory(whisk_bin_dir)
 
+name = lib
 if not name:
-    name = lib
+  name = find_library('whisk')
 
 cWhisk = CDLL(name)
 
