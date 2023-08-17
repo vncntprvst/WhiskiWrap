@@ -25,7 +25,7 @@ from numpy import where, cos, sin, sum
 from warnings import warn
 
 import whisk
-import pdb
+# import pdb
 
 def get_all_subdirectories(path):
     return [d for d, _, _ in os.walk(path)]
