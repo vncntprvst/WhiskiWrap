@@ -23,7 +23,7 @@ setup(
       'imagecodecs',
       'statsmodels',
       'ffmpeg-python>=0.2.0',
-      'whisk-janelia'
+      'whisk-janelia[ffmpeg]'
       ],
    include_package_data=True,
 )
