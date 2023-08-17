@@ -15,7 +15,7 @@ All rights reserved.
 Use is subject to Janelia Farm Research Campus Software Copyright 1.1
 license terms (http://license.janelia.org/license/jfrc_copyright_1_1.html).
 
-Moved to WhiskiWrap repository by Vincent Prevosto, 05/2023
+Copied to WhiskiWrap repository by Vincent Prevosto, 05/2023
 """
 import sys,os
 from ctypes import *
@@ -27,35 +27,93 @@ from warnings import warn
 import whisk
 import pdb
 
+def get_all_subdirectories(path):
+    return [d for d, _, _ in os.walk(path)]
+    # return [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+    
+def ensure_ffmpeg_dlls_are_present(whisk_bin_dir):
+    ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
+    
+    if not os.path.exists(ffmpeg_dll_dir):
+        import requests, zipfile
+        print("First-time setup: downloading necessary ffmpeg DLLs. This might take a few minutes...")
+        try:
+            from whisk import whisk_utils
+            whisk_utils.download_and_extract_ffmpeg_dlls()
+            
+        except requests.exceptions.RequestException as e:
+            # Handle exceptions caused by requests library during the download
+            print(f"Error downloading ffmpeg DLLs: {str(e)}")
+            print("Please check your internet connection and try again.")
+        
+        except zipfile.BadZipFile:
+            # Handle issues with extraction due to a corrupted download
+            print("Error extracting ffmpeg DLLs. The downloaded file might be corrupted.")
+            print("Please try running the script again.")
+        
+        except PermissionError:
+            # Handle potential write permission errors gracefully
+            print("Permission error while trying to save ffmpeg DLLs. Please ensure you have write permissions to the target directory and try again.")
+        
+        except Exception as e:
+            # Catch all other unexpected exceptions
+            print(f"An unexpected error occurred: {str(e)}")
+            print("Please report this issue to the software maintainers.")
+
+def load_ffmpeg_dlls(whisk_bin_dir):
+    """
+    Load ffmpeg DLLs required for cWhisk.
+    
+    Args:
+    - whisk_bin_dir: the imported whisk module's bin directory
+    """
+    ensure_ffmpeg_dlls_are_present(whisk_bin_dir)
+
+    ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
+
+    ffmpeg_dll_names = [
+        "avcodec-60.dll",
+        "avdevice-60.dll",
+        "avformat-60.dll",
+        "avutil-58.dll",
+        "swscale-7.dll",
+    ]
+
+    ffmpeg_dlls = [os.path.join(ffmpeg_dll_dir, dll_name) for dll_name in ffmpeg_dll_names]
+
+    # Load each ffmpeg DLL
+    for dll in ffmpeg_dlls:
+        CDLL(dll)
+        # print(f"Loaded {dll} successfully!")
+
 # Find the base directory of the whisk package
 whisk_base_dir = os.path.dirname(whisk.__file__)
+whisk_bin_dir = os.path.join(whisk_base_dir, 'bin')
+# Set WHISKPATH environment variable to whisk/bin
+os.environ['WHISKPATH'] = whisk_bin_dir
+# Get all subdirectories of whisk/bin
+all_directories = get_all_subdirectories(whisk_bin_dir)
 
 if sys.platform == 'win32':
-    lib = os.path.join(whisk_base_dir, 'bin', 'whisk.dll')
+    lib = os.path.join(whisk_bin_dir, 'whisk.dll')
 else:
-    lib = os.path.join(whisk_base_dir, 'bin', 'libwhisk.so')
+    lib = os.path.join(whisk_bin_dir, 'libwhisk.so')
     
-os.environ['PATH'] += os.pathsep + os.pathsep.join(['.', '..', whisk_base_dir])
-name = find_library('whisk')
+# Append both whisk base directory and bin directory to PATH
+os.environ['PATH'] += os.pathsep + os.pathsep.join(['.', '..', whisk_base_dir, whisk_bin_dir]) 
+# Append all bin sub_directories to PATH
+os.environ['PATH'] = os.environ['PATH'] + ';' + ';'.join(all_directories)
 
+name = lib
 if not name:
-    name = lib
+  name = find_library('whisk')
 
-cWhisk = CDLL(name)
-
-# Set WHISKPATH environment variable to whisk/bin
-os.environ['WHISKPATH'] = os.path.join(whisk_base_dir, 'bin')
-
-# dllpath = os.path.split(os.path.abspath(__file__))[0]
-# if sys.platform == 'win32':
-#   lib = os.path.join(dllpath,'whisk.dll')
-# else:
-#   lib = os.path.join(dllpath,'libwhisk.so')
-# os.environ['PATH']+=os.pathsep + os.pathsep.join(['.','..',dllpath])
-# name = find_library('whisk')
-# if not name:
-#   name=lib
-# cWhisk = CDLL(name)
+try:
+    cWhisk = CDLL(name)
+except OSError:
+    # If loading cWhisk failed, attempt to load ffmpeg DLLs and then try again
+    load_ffmpeg_dlls(whisk_bin_dir)
+    cWhisk = CDLL(name)
 
 _param_file = "default.parameters"
 if cWhisk.Load_Params_File(_param_file)==1: #returns 0 on success, 1 on failure

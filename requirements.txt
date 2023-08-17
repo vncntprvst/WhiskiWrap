@@ -8,3 +8,5 @@ imagecodecs
 statsmodels
 ffmpeg-python >= 0.2.0
 whisk-janelia #@ git+https://github.com/vncntprvst/whisk.git
+
+# Usage: pip install -r requirements.txt
