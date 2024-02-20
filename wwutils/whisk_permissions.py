@@ -5,8 +5,6 @@ import stat
 import distutils.sysconfig
 
 def update_permissions():
-    print("Updating permissions of files in the 'bin' directory...")
-
     # Locate the 'bin' directory in the site-packages
     site_packages_dir = distutils.sysconfig.get_python_lib()
     bin_dir = os.path.join(site_packages_dir, 'whisk', 'bin')
@@ -18,7 +16,7 @@ def update_permissions():
     #  Test if trace can be executed
     trace_file = os.path.join(bin_dir, 'trace')
     if not os.access(trace_file, os.X_OK):
-        # Update the permissions of each file in the 'bin' directory
+        print("Updating permissions of executable files in the 'whisk/bin' directory")
         for filename in os.listdir(bin_dir):
             file_path = os.path.join(bin_dir, filename)
 
