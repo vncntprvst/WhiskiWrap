@@ -15,25 +15,28 @@ def update_permissions():
         print("Error: 'bin' directory not found. Please ensure the package is installed correctly.")
         return
 
-    # Update the permissions of each file in the 'bin' directory
-    for filename in os.listdir(bin_dir):
-        file_path = os.path.join(bin_dir, filename)
+    #  Test if trace can be executed
+    trace_file = os.path.join(bin_dir, 'trace')
+    if not os.access(trace_file, os.X_OK):
+        # Update the permissions of each file in the 'bin' directory
+        for filename in os.listdir(bin_dir):
+            file_path = os.path.join(bin_dir, filename)
 
-        if os.path.isfile(file_path):
-            # If on Windows skip files that are not executable
-            if os.name == 'nt' and not filename.endswith('.exe'):
-                continue
-            # If on Linux, skip files that have an extension
-            elif os.name == 'posix' and filename.find('.') != -1:
-                continue
+            if os.path.isfile(file_path):
+                # If on Windows skip files that are not executable
+                if os.name == 'nt' and not filename.endswith('.exe'):
+                    continue
+                # If on Linux, skip files that have an extension
+                elif os.name == 'posix' and filename.find('.') != -1:
+                    continue
 
-            # For current user: read, write, execute; for group and others: read only
-            os.chmod(file_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
-            # For all users: read, write, execute
-            # os.chmod(file_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
-            print(f"Updated permissions for {filename}")
+                # For current user: read, write, execute; for group and others: read only
+                os.chmod(file_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
+                # For all users: read, write, execute
+                # os.chmod(file_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+                print(f"Updated permissions for {filename}")
 
-    print("Permissions update complete.")
+        print("Permissions update complete.")
 
 if __name__ == "__main__":
     update_permissions()
