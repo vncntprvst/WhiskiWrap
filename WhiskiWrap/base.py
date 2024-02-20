@@ -222,7 +222,8 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
             stderr=subprocess.PIPE,
             )
         stdout, stderr = trace_pipe.communicate()
-    except:
+    except Exception as e:
+        print(e)
         raise
     finally:
         os.chdir(orig_dir)
@@ -243,7 +244,8 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
             stderr=subprocess.PIPE,
             )
         stdout, stderr = measure_pipe.communicate()
-    except:
+    except Exception as e:
+        print(e)
         raise
     finally:
         os.chdir(orig_dir)
@@ -273,7 +275,8 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
                 stderr=subprocess.PIPE,
                 )
             stdout, stderr = reclassify_pipe.communicate()
-        except:
+        except Exception as e:
+            print(e)
             raise
         finally:
             os.chdir(orig_dir)
@@ -450,9 +453,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
                 h5seg['follicle_y'] = wseg.y[-1]
                 h5seg['tip_x'] = wseg.x[0]
                 h5seg['tip_y'] = wseg.y[0]
-
-                
-
+   
             assert len(wseg.x) == len(wseg.y)
             h5seg.append()
 
@@ -647,7 +648,6 @@ def pipeline_trace(input_vfile, h5_filename,
         chunk_names = ['chunk%08d.tif' % nframe for nframe in chunk_starts]
         whisk_names = ['chunk%08d.whiskers' % nframe for nframe in chunk_starts]
 
-
         # read everything
         # need to be able to crop here
         print("Reading")
@@ -687,7 +687,6 @@ def pipeline_trace(input_vfile, h5_filename,
                 list(zip([os.path.join(input_dir, whisk_name)
                     for whisk_name in whisk_names],itertools.repeat(face))))
             pool.close()
-
 
         # stitch
         print("Stitching")
