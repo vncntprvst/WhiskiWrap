@@ -364,7 +364,7 @@ def index_measurements(whiskers,measurements):
     
     return measurements
               
-def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measurements_filename=None):
+def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measurements_filename=None, summary_only=False):
     """Load data from whisk_file and put it into an hdf5 file
 
     The HDF5 file will have two basic components:
@@ -423,8 +423,9 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     ## Iterate over rows and store
     table = h5file.get_node('/summary')
     h5seg = table.row
-    xpixels_vlarray = h5file.get_node('/pixels_x')
-    ypixels_vlarray = h5file.get_node('/pixels_y')
+    if not summary_only:
+        xpixels_vlarray = h5file.get_node('/pixels_x')
+        ypixels_vlarray = h5file.get_node('/pixels_y')
     for frame, frame_whiskers in list(whiskers.items()):
         for whisker_id, wseg in list(frame_whiskers.items()):
             # Write to the table
@@ -457,9 +458,10 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
             assert len(wseg.x) == len(wseg.y)
             h5seg.append()
 
+            if not summary_only:
             # Write whisker contour x and y pixel values
-            xpixels_vlarray.append(wseg.x)
-            ypixels_vlarray.append(wseg.y)
+                xpixels_vlarray.append(wseg.x)
+                ypixels_vlarray.append(wseg.y)
 
     table.flush()
     h5file.close()
