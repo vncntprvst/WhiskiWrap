@@ -4,10 +4,6 @@ import numpy as np
 import pandas as pd
 # from sklearn.cluster import KMeans
 
-#  TODO:  
-#  4. Add a save only summary option to speed up the process
-#  5. Try to parallelize saving to hdf5 / or use a different format (e.g. feather, mmap?)
-
 def reassess_whisker_ids(h5_filename):
     summary = ww.read_whiskers_hdf5_summary(h5_filename)
     # print(summary.head())    
