@@ -1045,7 +1045,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
     h5_filename=None, frame_func=None,
     n_trace_processes=4, expectedrows=1000000,
-    verbose=True, skip_stitch=False, face='right', classify=None
+    verbose=True, skip_stitch=False, face='right', classify=None, summary_only=False
     ):
     """Read, write, and trace each chunk, one at a time.
 
@@ -1264,7 +1264,8 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 whisk_filename=fn.whiskers,
 		        measurements_filename = fn.measurements,
                 h5_filename=h5_filename,
-                chunk_start=chunk_start)
+                chunk_start=chunk_start,
+                summary_only=summary_only)
 
     # Finalize writers
     ctw.close()
