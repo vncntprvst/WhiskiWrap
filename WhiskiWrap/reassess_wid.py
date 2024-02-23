@@ -2,6 +2,7 @@ import WhiskiWrap as ww
 import sys, os, json
 import numpy as np
 import pandas as pd
+# import time
 # from sklearn.cluster import KMeans
 
 def reassess_whisker_ids(h5_filename):
@@ -46,7 +47,7 @@ def reassess_whisker_ids(h5_filename):
         else:
             continue
 
-    return update_summary_with_new_ids(grouped_by_fid)
+    return update_summary_with_new_ids(grouped_by_fid), filtered_summary
 
 def is_reassignment_needed(current_frame_whiskers, previous_frame_whiskers, face_axis, face_orientation):
     # Check if the number of whiskers is the same in both frames
@@ -105,6 +106,9 @@ def update_summary_with_new_ids(grouped_by_fid):
     return updated_summary
 
 def find_closest_whisker(whisker, previous_frame_whiskers):
+    # Method 1
+    # time it
+    # time1 = time.time()
     min_distance = float('inf')
     closest_whisker = None
 
@@ -113,6 +117,32 @@ def find_closest_whisker(whisker, previous_frame_whiskers):
         if distance < min_distance:
             min_distance = distance
             closest_whisker = next_whisker
+
+    # print(f"Method 1 took {time.time() - time1} seconds")
+
+    # time2 = time.time()
+    # #  Method 2
+    # closest_whisker, min_distance = closest_whisker_distance(whisker, previous_frame_whiskers)     
+    # print(f"Method 2 took {time.time() - time2} seconds")
+
+    return closest_whisker, min_distance
+
+def closest_whisker_distance(whisker, previous_frame_whiskers):
+    # Convert whisker to a NumPy array
+    whisker_array = np.array([whisker['follicle_x'], whisker['follicle_y'], whisker['angle']])
+
+    # Convert previous_frame_whiskers to a NumPy array
+    previous_frame_whiskers_array = previous_frame_whiskers[['follicle_x', 'follicle_y', 'angle']].to_numpy()
+
+    # Calculate the Euclidean distance to all whiskers in the previous frame
+    distances = np.sqrt(np.sum((previous_frame_whiskers_array - whisker_array)**2, axis=1))
+
+    # Find the index of the closest whisker
+    min_index = np.argmin(distances)
+
+    # Get the closest whisker and minimum distance
+    closest_whisker = previous_frame_whiskers.iloc[min_index]
+    min_distance = distances[min_index]
 
     return closest_whisker, min_distance
 
@@ -231,7 +261,7 @@ def plot_angle_traces(loaded_data, output_filename):
 
 def update_wids(h5_filename):
     # Call the reassess function
-    updated_summary = reassess_whisker_ids(h5_filename)
+    updated_summary, filtered_summary = reassess_whisker_ids(h5_filename)
 
     # Save the updated summary to a new hdf5 file
     output_filename = h5_filename.replace('.hdf5', '_updated_wids.hdf5')
@@ -245,7 +275,7 @@ def update_wids(h5_filename):
     #  Load the updated summary and plot the distributions
     # with pd.HDFStore(output_filename, 'r') as store:
     #     loaded_data = store.get('updated_summary')
-
+    plot_angle_traces(filtered_summary, h5_filename)
     plot_angle_traces(updated_summary, output_filename)
 
 if __name__ == "__main__":
