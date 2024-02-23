@@ -267,8 +267,10 @@ def update_wids(h5_filename):
     output_filename = h5_filename.replace('.hdf5', '_updated_wids.hdf5')
 
     # Create an HDF5 file and store the DataFrame
-    with pd.HDFStore(output_filename, 'w') as store:
-        store.put('updated_summary', updated_summary, format='table', data_columns=True)
+    updated_summary.to_hdf(output_filename, key='updated_summary', format='table', data_columns=True)
+
+    # with pd.HDFStore(output_filename, 'w') as store:
+    #     store.put('updated_summary', updated_summary, format='table', data_columns=True)
 
     print(f"Updated summary saved to {output_filename}")
 

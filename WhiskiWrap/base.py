@@ -1658,7 +1658,19 @@ def measure_chunk_star(args):
 def read_whiskers_hdf5_summary(filename):
     """Reads and returns the `summary` table in an HDF5 file"""
     with tables.open_file(filename) as fi:
-        summary = pandas.DataFrame.from_records(fi.root.summary.read())
+        # Check whether the summary table exists, or updated_summary
+        if '/summary' in fi:
+            summary = pandas.DataFrame.from_records(fi.root.summary.read())
+        elif '/updated_summary' in fi:
+            try:
+                # Assuming a group
+                summary = pandas.DataFrame.from_records(fi.root.updated_summary.read())
+            except:
+                # Then assuming a table
+                table_node = fi.get_node('/updated_summary/table')
+                summary = pd.DataFrame.from_records(table_node.read())
+        else:
+            raise ValueError("no summary table found")
 
     return summary
 
