@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.1.6',
+   version='1.1.7',
    author='Chris Rodgers',
    author_email='',
    maintainer=', '.join(['cxrodgers','aiporre','vncntprvst']),
