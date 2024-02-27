@@ -3,10 +3,8 @@ import sys, os, re, json
 import numpy as np
 import pandas as pd
 # import time
-# from sklearn.cluster import KMeans
 from scipy.signal import argrelextrema
 from scipy.stats import gaussian_kde
-# from sklearn.neighbors import KernelDensity
 
 def get_summary(filename, filter = True):
     # Check if it's a list of whiskers/measurements files
@@ -78,10 +76,6 @@ def reassess_whisker_ids(filename):
             continue
 
     return update_summary_with_new_ids(grouped_by_fid), filtered_summary
-
-def get_whisker_data
-
-def filter_whiskers
 
 def is_reassignment_needed(current_frame_whiskers, previous_frame_whiskers, face_axis, face_orientation):
     # Check if the number of whiskers is the same in both frames
