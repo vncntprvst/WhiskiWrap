@@ -1,22 +1,44 @@
 import WhiskiWrap as ww
-import sys, os, json
+import sys, os, re, json
 import numpy as np
 import pandas as pd
 # import time
 # from sklearn.cluster import KMeans
+from scipy.signal import argrelextrema
+from scipy.stats import gaussian_kde
+# from sklearn.neighbors import KernelDensity
 
-def reassess_whisker_ids(h5_filename):
-    summary = ww.read_whiskers_hdf5_summary(h5_filename)
-    # print(summary.head())    
+def get_summary(filename, filter = True):
+    # Check if it's a list of whiskers/measurements files
+    if isinstance(filename, list):
+        if filename[0].endswith(('.whiskers', '.measurements')):
+        # if file is a list of whiskers/measurements files, load all of them
+            summary = ww.read_whiskers_measurements(filename)
+            # update nomenclature
+            if 'whisker_id' in summary:
+                # replace whisker_id with wid, and frame_id with fid
+                summary.rename(columns={'whisker_id': 'wid', 'frame_id': 'fid'}, inplace=True)
+            filename = filename[0]
+            base_filename = os.path.basename(filename.replace('_right', '').replace('_left', '')).split(".")[0]
+            # also remove the trailing numbers at the end of the filename
+            base_filename = re.sub(r'_\d+$', '', base_filename)
+            # whiskerpad_file is in the directory above the input file
+            whiskerpad_file = os.path.join(os.path.dirname(os.path.dirname(filename)), f'whiskerpad_{base_filename}.json')     
+
+    elif isinstance(filename, str) and filename.endswith('.hdf5'):
+    # if file is a hdf5 file, load it
+        summary = ww.read_whiskers_hdf5_summary(filename)
+        # print(summary.head())   
+
+        base_filename = os.path.basename(filename.replace('_right', '').replace('_left', '')).split(".")[0]
+        whiskerpad_file = os.path.join(os.path.dirname(filename), f'whiskerpad_{base_filename}.json')
 
     # Load whiskerpad json file
-    base_filename = os.path.basename(h5_filename.replace('_right', '').replace('_left', '')).split(".")[0]
-    whiskerpad_file = os.path.join(os.path.dirname(h5_filename), f'whiskerpad_{base_filename}.json')
     with open(whiskerpad_file, 'r') as f:
         whiskerpad_params = json.load(f)
 
     # get the whiskerpad params for the correct side         
-    if '_right' in str(h5_filename):
+    if '_right' in str(filename):
         whiskerpad = next((whiskerpad for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == 'right'), None)
     else:
         whiskerpad = next((whiskerpad for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == 'left'), None)
@@ -28,9 +50,17 @@ def reassess_whisker_ids(h5_filename):
     # Determine a threshold for whisker length
     length_threshold = determine_length_threshold(summary)
     # score_threshold = determine_score_threshold(summary)
-    filtered_summary = filter_whiskers(summary, length_threshold)
 
-    grouped_by_fid = group_summary_by_fid(filtered_summary)
+    if filter:
+        summary = filter_whiskers(summary, length_threshold)
+
+    return summary
+
+def reassess_whisker_ids(filename):
+
+    summary = get_summary(filename)
+
+    grouped_by_fid = group_summary_by_fid(summary)
     for fid in range(1, max(grouped_by_fid.keys())):
         current_frame_whiskers = grouped_by_fid[fid]
         # next_frame_whiskers = grouped_by_fid[fid + 1]
@@ -48,6 +78,10 @@ def reassess_whisker_ids(h5_filename):
             continue
 
     return update_summary_with_new_ids(grouped_by_fid), filtered_summary
+
+def get_whisker_data
+
+def filter_whiskers
 
 def is_reassignment_needed(current_frame_whiskers, previous_frame_whiskers, face_axis, face_orientation):
     # Check if the number of whiskers is the same in both frames
@@ -195,8 +229,26 @@ def filter_whiskers(summary, length_threshold, score_threshold=None):
         return summary[summary['pixel_length'] > length_threshold]
 
 def determine_length_threshold(summary):
-    #  Cutoff at 75th percentile, since most whiskers are actually hair
-    length_threshold = np.percentile(summary['pixel_length'], 75)
+    # Convert data to numpy array and reshape
+    data = np.array(summary['pixel_length']).reshape(-1, 1).ravel()
+
+    # Fit the KDE model
+    kde = gaussian_kde(data)
+
+    # Evaluate the densities
+    kde_values = kde.evaluate(data)
+
+    # Find local minima of the KDE, which are the troughs of the bimodal distribution
+    local_minima = argrelextrema(kde_values, np.less)
+
+    # If there are any local minima, use the first one as the cutoff
+    if local_minima[0].size > 0:
+        length_threshold = data[local_minima[0][0]]
+    else:
+        # If there are no local minima, fall back to using the 75th percentile
+        length_threshold = np.percentile(summary['pixel_length'], 75)
+    # #  Cutoff at 75th percentile, since most whiskers are actually hair
+    # length_threshold = np.percentile(summary['pixel_length'], 75)
 
     # mean_length = np.mean(summary['pixel_length'])
     # std_dev_length = np.std(summary['pixel_length'])
@@ -223,7 +275,10 @@ def group_summary_by_fid(summary):
         dict: A dictionary where each key is a frame ID and each value is a DataFrame of whisker segments for that frame.
     """
     # Group the DataFrame by 'fid' and create a dictionary
+    # if 'fid' in summary.columns:
     grouped = summary.groupby('fid')
+    # else:
+    #     grouped = summary.groupby('frame_id')
     grouped_by_fid = {fid: group for fid, group in grouped}
     
     return grouped_by_fid

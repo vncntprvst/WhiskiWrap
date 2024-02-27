@@ -504,7 +504,7 @@ def initialize_whisker_measurement_table():
 
     return measurement_data, column_types
 
-def read_whisker_data(filename):
+def read_whisker_data(filename, output_format='dict'):
     """
     Parameter: filename (str) - path to whisker file.
     Accepts hdf5 and .whiskers files. If the latter, it will look for a .measurements file in the same directory.
@@ -606,9 +606,11 @@ def read_whisker_data(filename):
         meas_table.rename(columns={'fid': 'frame_id', 'wid': 'whisker_id'}, inplace=True)
                 
     # Convert to dictionary
-    data_dict = {k: meas_table[k].values for k in meas_table.columns}
-    
-    return data_dict
+    if output_format == 'dict':
+        data_dict = {k: meas_table[k].values for k in meas_table.columns}
+        return data_dict
+    elif output_format == 'df':
+        return meas_table
 
 def pipeline_trace(input_vfile, h5_filename,
     epoch_sz_frames=3200, chunk_sz_frames=200,
@@ -1673,6 +1675,29 @@ def read_whiskers_hdf5_summary(filename):
             raise ValueError("no summary table found")
 
     return summary
+
+def read_whiskers_measurements(filenames):
+    # Loads all the whiskers/measurements files and returns an aggregated dataframe
+
+    # Check that it is a list
+    if not isinstance(filenames, list):
+        filenames = [filenames]
+
+    # Load the measurements
+    all_measurements = []
+    for filename in filenames:
+        #  strip the extension and replace with .whiskers
+        if not filename.endswith('.whiskers'):
+            filename = filename.replace(filename.split('.')[-1], 'whiskers')
+        # get the whisker data
+        measurements = WhiskiWrap.read_whisker_data(filename, 'df')
+        # append the dataframe to the list
+        all_measurements.append(measurements)
+
+    # Concatenate the dataframes
+    all_measurements = pd.concat(all_measurements)
+
+    return all_measurements
 
 class PFReader:
     """Reads photonfocus modulated data stored in matlab files"""
