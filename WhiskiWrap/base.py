@@ -1141,7 +1141,12 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     if skip_existing:
     # Check if .whiskers or .measurements files already exist
-        existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endswith('.measurements')]
+        # Remove the extension from the chunk_name_pattern and replace %08d with a regular expression
+        pattern = chunk_name_pattern.replace('.tif', r'(.whiskers|.measurements)').replace('%08d', r'\d{8}')
+        existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if re.match(pattern, f)]
+        # Any whiskers or measurements files (less precise than the pattern):
+        # existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endswith('.measurements')]
+
         if len(existing_files) > 0:
             print("Existing files found, skipping to HDF5 stitching")
             # create sorted_file_numbers, sorted_filenames
