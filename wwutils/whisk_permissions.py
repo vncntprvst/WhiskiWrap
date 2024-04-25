@@ -4,7 +4,7 @@ import os
 import stat
 import distutils.sysconfig
 
-def update_permissions():
+def update_permissions(verbose=False):
     # Locate the 'bin' directory in the site-packages
     site_packages_dir = distutils.sysconfig.get_python_lib()
     bin_dir = os.path.join(site_packages_dir, 'whisk', 'bin')
@@ -32,9 +32,10 @@ def update_permissions():
                 os.chmod(file_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
                 # For all users: read, write, execute
                 # os.chmod(file_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
-                print(f"Updated permissions for {filename}")
-
-        print("Permissions update complete.")
+                if verbose:
+                    print(f"Updated permissions for {filename}")
+        if verbose:
+            print("Permissions update complete.")
 
 if __name__ == "__main__":
     update_permissions()
