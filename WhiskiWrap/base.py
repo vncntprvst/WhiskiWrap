@@ -566,7 +566,7 @@ def read_whisker_data(filename, output_format='dict'):
                 new_meas_row = {
                     'frame_id': wseg.time + chunk_start,
                     'whisker_id': wseg.id,
-                    'label': 0,
+                    'label': measurements[measurements_idx][2],
                     'face_x': M._measurements.contents.face_x,
                     'face_y': M._measurements.contents.face_y,
                     'length': measurements[measurements_idx][3],
