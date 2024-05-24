@@ -110,10 +110,11 @@ if not name:
 
 try:
     cWhisk = CDLL(name)
-except OSError:
-    # If loading cWhisk failed, attempt to load ffmpeg DLLs and then try again
-    load_ffmpeg_dlls(whisk_bin_dir)
-    cWhisk = CDLL(name)
+except OSError as e:
+  print(f"Error loading {name}: {str(e)}")
+  # If loading cWhisk failed, attempt to load ffmpeg DLLs and then try again
+  load_ffmpeg_dlls(whisk_bin_dir)
+  cWhisk = CDLL(name)
 
 _param_file = "default.parameters"
 if cWhisk.Load_Params_File(_param_file)==1: #returns 0 on success, 1 on failure
