@@ -28,13 +28,25 @@ def load_ffmpeg_dlls_from_conda_env():
     library_bin_path = os.path.join(conda_prefix, 'Library', 'bin')
     
     # List of FFmpeg DLLs to be loaded
-    ffmpeg_dll_names = [
-        "avcodec-60.dll",
-        "avdevice-60.dll",
-        "avformat-60.dll",
-        "avutil-58.dll",
-        "swscale-7.dll"
-    ]
+    if os.name == 'posix':
+      
+      ffmpeg_dll_names = [
+          "libavcodec.so.60",
+          "libavdevice.so.60",
+          "libavformat.so.60",
+          "libavutil.so.58",
+          "libswscale.so.7",
+      ]      
+      
+    elif os.name == 'nt':
+        
+        ffmpeg_dll_names = [
+            "avcodec-60.dll",
+            "avdevice-60.dll",
+            "avformat-60.dll",
+            "avutil-58.dll",
+            "swscale-7.dll"
+        ]
     
     for dll_name in ffmpeg_dll_names:
         dll_path = os.path.join(library_bin_path, dll_name)

@@ -32,10 +32,13 @@ def get_all_subdirectories(path):
     # return [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
     
 def ensure_ffmpeg_dlls_are_present(whisk_bin_dir):
-    ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
+    if os.name == 'posix':
+      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_linux64_lgpl_shared')
+    elif os.name == 'nt':
+      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
     
     if not os.path.exists(ffmpeg_dll_dir):
-        import requests, zipfile
+        import requests, zipfile, tarfile
         print("First-time setup: downloading necessary ffmpeg DLLs. This might take a few minutes...")
         try:
             from whisk import whisk_utils
@@ -45,10 +48,10 @@ def ensure_ffmpeg_dlls_are_present(whisk_bin_dir):
             # Handle exceptions caused by requests library during the download
             print(f"Error downloading ffmpeg DLLs: {str(e)}")
             print("Please check your internet connection and try again.")
-        
-        except zipfile.BadZipFile:
+                    
+        except (zipfile.BadZipFile, tarfile.ReadError) as e:
             # Handle issues with extraction due to a corrupted download
-            print("Error extracting ffmpeg DLLs. The downloaded file might be corrupted.")
+            print(f"Error extracting ffmpeg DLLs: {str(e)}. The downloaded file might be corrupted.")
             print("Please try running the script again.")
         
         except PermissionError:
@@ -69,15 +72,27 @@ def load_ffmpeg_dlls(whisk_bin_dir):
     """
     ensure_ffmpeg_dlls_are_present(whisk_bin_dir)
 
-    ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
+    if os.name == 'posix':
+      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_linux64_lgpl_shared')
+      
+      ffmpeg_dll_names = [
+          "libavcodec.so.60",
+          "libavdevice.so.60",
+          "libavformat.so.60",
+          "libavutil.so.58",
+          "libswscale.so.7",
+      ]      
+      
+    elif os.name == 'nt':
+      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
 
-    ffmpeg_dll_names = [
-        "avcodec-60.dll",
-        "avdevice-60.dll",
-        "avformat-60.dll",
-        "avutil-58.dll",
-        "swscale-7.dll",
-    ]
+      ffmpeg_dll_names = [
+          "avcodec-60.dll",
+          "avdevice-60.dll",
+          "avformat-60.dll",
+          "avutil-58.dll",
+          "swscale-7.dll",
+      ]
 
     ffmpeg_dlls = [os.path.join(ffmpeg_dll_dir, dll_name) for dll_name in ffmpeg_dll_names]
 
