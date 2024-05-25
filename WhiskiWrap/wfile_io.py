@@ -42,7 +42,7 @@ def ensure_ffmpeg_dlls_are_present(whisk_bin_dir):
         print("First-time setup: downloading necessary ffmpeg DLLs. This might take a few minutes...")
         try:
             from whisk import whisk_utils
-            whisk_utils.download_and_extract_ffmpeg_dlls()
+            whisk_utils.download_and_extract_ffmpeg_dlls(ffmpeg_dll_dir)
             
         except requests.exceptions.RequestException as e:
             # Handle exceptions caused by requests library during the download
@@ -62,6 +62,8 @@ def ensure_ffmpeg_dlls_are_present(whisk_bin_dir):
             # Catch all other unexpected exceptions
             print(f"An unexpected error occurred: {str(e)}")
             print("Please report this issue to the software maintainers.")
+            
+    return ffmpeg_dll_dir
 
 def load_ffmpeg_dlls(whisk_bin_dir):
     """
@@ -70,21 +72,19 @@ def load_ffmpeg_dlls(whisk_bin_dir):
     Args:
     - whisk_bin_dir: the imported whisk module's bin directory
     """
-    ensure_ffmpeg_dlls_are_present(whisk_bin_dir)
+    ffmpeg_dll_dir=ensure_ffmpeg_dlls_are_present(whisk_bin_dir)
 
     if os.name == 'posix':
-      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_linux64_lgpl_shared')
       
       ffmpeg_dll_names = [
           "libavcodec.so.60",
-          "libavdevice.so.60",
-          "libavformat.so.60",
           "libavutil.so.58",
+          "libavformat.so.60",
           "libswscale.so.7",
+          "libavdevice.so.60",
       ]      
       
     elif os.name == 'nt':
-      ffmpeg_dll_dir = os.path.join(whisk_bin_dir, 'ffmpeg_win64_lgpl_shared')
 
       ffmpeg_dll_names = [
           "avcodec-60.dll",
@@ -97,9 +97,16 @@ def load_ffmpeg_dlls(whisk_bin_dir):
     ffmpeg_dlls = [os.path.join(ffmpeg_dll_dir, dll_name) for dll_name in ffmpeg_dll_names]
 
     # Load each ffmpeg DLL
+    if os.name == 'posix':
+        # On POSIX systems, ensure LD_LIBRARY_PATH includes the whisk_bin_dir
+        os.environ['LD_LIBRARY_PATH'] = whisk_bin_dir + os.pathsep + os.environ.get('LD_LIBRARY_PATH', '')
+        os.system(f'export LD_LIBRARY_PATH={os.environ["LD_LIBRARY_PATH"]}')
+                
     for dll in ffmpeg_dlls:
-        CDLL(dll)
-        # print(f"Loaded {dll} successfully!")
+        try:
+          CDLL(dll)
+        except OSError as e:  
+          print(f"Failed to load {dll}: {e}")
 
 # Find the base directory of the whisk package
 whisk_base_dir = os.path.dirname(whisk.__file__)
