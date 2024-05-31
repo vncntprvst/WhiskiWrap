@@ -27,6 +27,7 @@ import ctypes
 import time
 import shutil
 import itertools
+import zarr
 
 # from . import wfile_io
 # from .mfile_io import MeasurementsTable
@@ -479,6 +480,99 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     table.flush()
     h5file.close()
 
+
+def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurements_filename=None, summary_only=False):
+    """Load data from whisk_file and put it into a zarr file
+
+    The Zarr file will have two basic components:
+        /summary : A table with the following columns:
+            fid, wid, follicle_x, follicle_y, tip_x, tip_y, pixel_length
+            These are all directly taken from the whisk file
+        /pixels_x : An array of the same length as summary but with the
+            entire array of x-coordinates of each segment.
+        /pixels_y : Same but for y-coordinates
+    """
+    print(whisk_filename)
+
+    whiskers = wfile_io.Load_Whiskers(whisk_filename)
+    nwhisk = np.sum(list(map(len, list(whiskers.values()))))
+
+    if measurements_filename is not None:
+        print(measurements_filename)
+        M = MeasurementsTable(str(measurements_filename))
+        measurements = M.asarray()
+        measurements_idx = 0
+
+        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
+        initial_frame_measurements = measurements[:len(wid_from_trace)]
+        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
+
+        if not np.array_equal(wid_from_trace, wid_from_measure):
+            measurements = index_measurements(whiskers, measurements)
+    
+    # Open or create Zarr file
+    zarr_file = zarr.open(zarr_filename, mode='a')
+
+    # Create summary dataset if it doesn't exist
+    if 'summary' not in zarr_file:
+        zarr_file.create_dataset('summary', shape=(0,), dtype=[
+            ('chunk_start', 'i4'), ('fid', 'i4'), ('wid', 'i4'),
+            ('follicle_x', 'f4'), ('follicle_y', 'f4'), ('tip_x', 'f4'),
+            ('tip_y', 'f4'), ('pixel_length', 'i4'), ('length', 'f4'),
+            ('score', 'f4'), ('angle', 'f4'), ('curvature', 'f4'),
+            ('face_x', 'f4'), ('face_y', 'f4'), ('label', 'i4')
+        ], chunks=(1000,), append_dim=0)
+    
+    summary = zarr_file['summary']
+    
+    if not summary_only:
+        if 'pixels_x' not in zarr_file:
+            zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=(1000,), append_dim=0)
+        if 'pixels_y' not in zarr_file:
+            zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=(1000,), append_dim=0)
+        pixels_x = zarr_file['pixels_x']
+        pixels_y = zarr_file['pixels_y']
+
+    for frame, frame_whiskers in list(whiskers.items()):
+        for whisker_id, wseg in list(frame_whiskers.items()):
+            summary_data = {
+                'chunk_start': chunk_start,
+                'fid': wseg.time + chunk_start,
+                'wid': wseg.id,
+                'pixel_length': len(wseg.x)
+            }
+
+            if measurements_filename is not None:
+                summary_data.update({
+                    'length': measurements[measurements_idx][3],
+                    'score': measurements[measurements_idx][4],
+                    'angle': measurements[measurements_idx][5],
+                    'curvature': measurements[measurements_idx][6],
+                    'follicle_x': measurements[measurements_idx][7],
+                    'follicle_y': measurements[measurements_idx][8],
+                    'tip_x': measurements[measurements_idx][9],
+                    'tip_y': measurements[measurements_idx][10],
+                    'label': 0,
+                    'face_x': M._measurements.contents.face_x,
+                    'face_y': M._measurements.contents.face_y
+                })
+                measurements_idx += 1
+            else:
+                summary_data.update({
+                    'follicle_x': wseg.x[-1],
+                    'follicle_y': wseg.y[-1],
+                    'tip_x': wseg.x[0],
+                    'tip_y': wseg.y[0]
+                })
+
+            summary.append(summary_data)
+            
+            if not summary_only:
+                pixels_x.append(wseg.x.tolist())
+                pixels_y.append(wseg.y.tolist())
+    
+    zarr_file.flush()
+
 def initialize_whisker_measurement_table():
     """Initialize tabular data to enter into WhiskerMeasurementTable, using Pandas DataFrames"""
     # Define column types
@@ -900,8 +994,9 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     # Keep track of results
     trace_pool_results = []
-    deleted_tiffs = []
+    # deleted_tiffs = []
     def log_result(result):
+        print("Result logged:", result)  # Verify the callback
         trace_pool_results.append(result)
 
     ## Iterate over chunks
@@ -1173,6 +1268,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             # Keep track of results
             deleted_tiffs = []
             def log_result(result):
+                print("Result logged:", result)  # Verify the callback
                 trace_pool_results.append(result)
 
             ## Iterate over chunks
@@ -1216,9 +1312,11 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 # Figure out which tiff file was just generated
                 tif_filename = ctw.chunknames_written[-1]
 
-                ## Start trace
-                trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify),
-                    callback=log_result)
+                # Start trace
+                try:
+                    trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify), callback=log_result)
+                except Exception as e:
+                    print("Error in apply_async:", e)
 
                 ## Determine whether we can delete any tiffs
                 #~ if delete_tiffs:
