@@ -10,7 +10,6 @@ The overall algorithm is contained in `interleaved_reading_and_tracing`.
 
 The previous function `pipeline_trace` is now deprecated.
 """
-import traceback
 import sys
 try:
     import tifffile
@@ -23,6 +22,12 @@ import pandas as pd
 import subprocess
 import multiprocessing
 import tables
+import scipy.io
+import ctypes
+import time
+import shutil
+import itertools
+
 # from . import wfile_io
 # from .mfile_io import MeasurementsTable
 # for debugging
@@ -33,6 +38,7 @@ from WhiskiWrap.mfile_io import MeasurementsTable
 #     from whisk import trace
 #     from whisk.traj import MeasurementsTable
 # except ImportError as e:
+    # import traceback
 #     traceback.print_tb(e.__traceback__)
 #     print("cannot import whisk")
 if sys.platform == 'win32':
@@ -42,16 +48,10 @@ else:
     if not whisk_path.endswith('/'):
         whisk_path += '/'
     print('WHISKPATH detected: ', whisk_path)
-import pandas
+
 import WhiskiWrap
 from WhiskiWrap import video_utils
 import wwutils
-import scipy.io
-import ctypes
-import glob
-import time
-import shutil
-import itertools
 
 # Find the repo directory and the default param files
 # The banks don't differe with sensitive or default
@@ -235,7 +235,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
 
     # Run measure:
     measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
-    measure_command = ['measure', '--face', face, whiskers_file, measurements_file]
+    measure_command = [whisk_path + 'measure', '--face', face, whiskers_file, measurements_file]
 
     os.chdir(run_dir)
     try:
@@ -259,9 +259,9 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
     # typical classify arguments are {'px2mm': '0.04', 'n_whiskers': '3'}
     if classify is not None:
         measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
-        classify_command = ['classify', measurements_file, measurements_file, 
+        classify_command = [whisk_path + 'classify', measurements_file, measurements_file, 
                             face, '--px2mm', classify['px2mm'], '-n', classify['n_whiskers']]
-        reclassify_command = ['reclassify', measurements_file, measurements_file, '-n', classify['n_whiskers']]
+        reclassify_command = [whisk_path + 'reclassify', measurements_file, measurements_file, '-n', classify['n_whiskers']]
 
         os.chdir(run_dir)
         try:
@@ -1117,7 +1117,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         input_reader.crop = None
 
     # Check commands
-    WhiskiWrap.utils.probe_needed_commands()
+    WhiskiWrap.utils.probe_needed_commands(paths=[whisk_path])
 
     ## Initialize readers and writers
     if verbose:
@@ -1667,11 +1667,11 @@ def read_whiskers_hdf5_summary(filename):
     with tables.open_file(filename) as fi:
         # Check whether the summary table exists, or updated_summary
         if '/summary' in fi:
-            summary = pandas.DataFrame.from_records(fi.root.summary.read())
+            summary = pd.DataFrame.from_records(fi.root.summary.read())
         elif '/updated_summary' in fi:
             try:
                 # Assuming a group
-                summary = pandas.DataFrame.from_records(fi.root.updated_summary.read())
+                summary = pd.DataFrame.from_records(fi.root.updated_summary.read())
             except:
                 # Then assuming a table
                 table_node = fi.get_node('/updated_summary/table')
