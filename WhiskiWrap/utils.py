@@ -101,21 +101,17 @@ def probe_command_availability(cmd):
     try:
         # If it fails here due to nonexistence of command, pipe is
         # never initialized
-        pipe = subprocess.Popen(cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pipe = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError:
         return False, '', ''
 
-    # This extract data from the pipe
-    # I think this will always work?
+    # This extracts data from the pipe
     try:
         stdout, stderr = pipe.communicate()
-    except:
-        raise RuntimeError("process crashed")
+    except Exception as e:
+        raise RuntimeError("process crashed") from e
 
     # Try to terminate it if it didn't already happen
-    # Add some point it seemed this was necessary to restored stdout
-    # but this no longer seems to be the case
     try:
         pipe.terminate()
     except OSError:
@@ -123,18 +119,34 @@ def probe_command_availability(cmd):
 
     return command_available, stdout, stderr
 
-def probe_needed_commands():
+def probe_needed_commands(*commands, **kwargs):
     """Test whether we have the commands we need.
 
-    ffmpeg
-    trace
-    """
-    ffmpeg_av = probe_command_availability('ffmpeg')
-    if not ffmpeg_av[0]:
-        raise OSError("'ffmpeg' is not available on the system path")
-    if 'the FFmpeg developers' not in str(ffmpeg_av[2]).split('\n')[0]:
-        print("warning: libav ffmpeg appears to be installed")
+    By default checks 'ffmpeg' and 'trace'.
 
-    trace_av = probe_command_availability('trace')
-    if not trace_av[0]:
-        raise OSError("'trace' is not available on the system path")
+    Additional commands can be specified as arguments.
+
+    Optional keyword arguments:
+        paths (list): Specific paths to check for the commands.
+    """
+    default_commands = ['ffmpeg', 'trace']
+    all_commands = default_commands + list(commands)
+    paths = kwargs.get('paths', [])
+
+    for cmd in all_commands:
+        cmd_av = False, '', ''
+        
+        # Check specified paths first
+        for path in paths:
+            full_cmd = [os.path.join(path, cmd)]
+            cmd_av = probe_command_availability(full_cmd)
+            if cmd_av[0]:
+                break
+        
+        # If not found in specified paths, check system path
+        if not cmd_av[0]:
+            cmd_av = probe_command_availability(cmd)
+
+        if not cmd_av[0]:
+            raise OSError(f"'{cmd}' is not available on the system path or specified paths")
+        
