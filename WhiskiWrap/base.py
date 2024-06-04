@@ -27,7 +27,13 @@ import ctypes
 import time
 import shutil
 import itertools
+import json
 import zarr
+# from filelock import FileLock
+import pickle
+import logging
+# Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # from . import wfile_io
 # from .mfile_io import MeasurementsTable
@@ -108,6 +114,9 @@ class WhiskerSeg_measure(tables.IsDescription):
     # face_x and face_y are signed integers as the face location assigned by measure may be outside the frame
     face_x = tables.Int32Col()
     face_y = tables.Int32Col()
+    # Adding a new face_side field
+    face_side = tables.StringCol(itemsize=6)
+    # Face side is a string, either 'left', 'right', 'top' or 'bottom'. Default is 'NA'.
 
 def write_chunk(chunk, chunkname, directory='.'):
     tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
@@ -298,7 +307,7 @@ def sham_trace_chunk(video_filename):
     time.sleep(2)
     return video_filename
 
-def setup_hdf5(h5_filename, expectedrows, measure=False):
+def setup_hdf5(h5_filename, expected_rows, measure=False):
 
     # Open file
     h5file = tables.open_file(h5_filename, mode="w")
@@ -311,19 +320,19 @@ def setup_hdf5(h5_filename, expectedrows, measure=False):
     # A group for the normal data
     table = h5file.create_table(h5file.root, "summary", WhiskerDescription,
         "Summary data about each whisker segment",
-        expectedrows=expectedrows)
+        expectedrows=expected_rows)
 
     # Put the contour here
     xpixels_vlarray = h5file.create_vlarray(
         h5file.root, 'pixels_x',
         tables.Float32Atom(shape=()),
         title='Every pixel of each whisker (x-coordinate)',
-        expectedrows=expectedrows)
+        expectedrows=expected_rows)
     ypixels_vlarray = h5file.create_vlarray(
         h5file.root, 'pixels_y',
         tables.Float32Atom(shape=()),
         title='Every pixel of each whisker (y-coordinate)',
-        expectedrows=expectedrows)
+        expectedrows=expected_rows)
 
     h5file.close()
 
@@ -378,17 +387,18 @@ def index_measurements(whiskers,measurements):
     
     return measurements
               
-def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measurements_filename=None, summary_only=False):
+def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measurements_filename=None, summary_only=False, face_side='NA'):
     """Load data from whisk_file and put it into an hdf5 file
 
     The HDF5 file will have two basic components:
         /summary : A table with the following columns:
-            fid, wid, follicle_x, follicle_y, tip_x, tip_y, pixel_length
-            These are all directly taken from the whisk file
+            If only .whiskers file given - fid, wid, follicle_x, follicle_y, tip_x, tip_y, pixel_length and chunk_start
+            With measurements - fields above + length, score, angle, curvature, face_x, face_y, label, and face_side
         /pixels_x : A vlarray of the same length as summary but with the
             entire array of x-coordinates of each segment.
         /pixels_y : Same but for y-coordinates
     """
+
     ## Load it, so we know what expected rows is
     # This loads all whisker info into C data types
     # wv is like an array of trace.LP_cWhisker_Seg
@@ -397,6 +407,9 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     # The python object responds to .time and .id (integers) and .x and .y (numpy
     # float arrays).
     #wv, nwhisk = trace.Debug_Load_Whiskers(whisk_filename)
+    # try:
+    
+    # logging.debug(f'Starting append_whiskers_to_hdf5 with whisk_filename={whisk_filename}, h5_filename={h5_filename}, chunk_start={chunk_start}')
     print(whisk_filename)
 
     whiskers = wfile_io.Load_Whiskers(whisk_filename)
@@ -406,6 +419,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     nwhisk = np.sum(list(map(len, list(whiskers.values()))))
 
     if measurements_filename is not None:
+        # logging.debug(f'Loading measurements from {measurements_filename}')
         print(measurements_filename)
         M = MeasurementsTable(str(measurements_filename))
         measurements = M.asarray()
@@ -428,6 +442,10 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
         if not np.array_equal(wid_from_trace, wid_from_measure):
             measurements=index_measurements(whiskers,measurements)
             
+    # # If this function is called in parallel (or other situations with concurrent access
+    # lock the file to ensure exclusive access:
+    # lock = FileLock(h5_filename + ".lock")
+    # with lock:
     # Open file
     h5file = tables.open_file(h5_filename, mode="a")
 
@@ -460,6 +478,7 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
                 h5seg['label'] = 0
                 h5seg['face_x'] = M._measurements.contents.face_x
                 h5seg['face_y'] = M._measurements.contents.face_y
+                h5seg['face_side'] = face_side
 
                 measurements_idx += 1
 
@@ -479,100 +498,272 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
 
     table.flush()
     h5file.close()
-
-
-def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurements_filename=None, summary_only=False):
-    """Load data from whisk_file and put it into a zarr file
-
-    The Zarr file will have two basic components:
-        /summary : A table with the following columns:
-            fid, wid, follicle_x, follicle_y, tip_x, tip_y, pixel_length
-            These are all directly taken from the whisk file
-        /pixels_x : An array of the same length as summary but with the
-            entire array of x-coordinates of each segment.
-        /pixels_y : Same but for y-coordinates
-    """
-    print(whisk_filename)
-
-    whiskers = wfile_io.Load_Whiskers(whisk_filename)
-    nwhisk = np.sum(list(map(len, list(whiskers.values()))))
-
-    if measurements_filename is not None:
-        print(measurements_filename)
-        M = MeasurementsTable(str(measurements_filename))
-        measurements = M.asarray()
-        measurements_idx = 0
-
-        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-        initial_frame_measurements = measurements[:len(wid_from_trace)]
-        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-        if not np.array_equal(wid_from_trace, wid_from_measure):
-            measurements = index_measurements(whiskers, measurements)
+    # logging.debug('Finished append_whiskers_to_hdf5 successfully')
     
-    # Open or create Zarr file
+    # except Exception as e:
+        # logging.error(f'Error in append_whiskers_to_hdf5: {e}', exc_info=True)
+
+def initialize_zarr(zarr_filename, chunk_size=(1000,)):
     zarr_file = zarr.open(zarr_filename, mode='a')
 
-    # Create summary dataset if it doesn't exist
     if 'summary' not in zarr_file:
         zarr_file.create_dataset('summary', shape=(0,), dtype=[
             ('chunk_start', 'i4'), ('fid', 'i4'), ('wid', 'i4'),
             ('follicle_x', 'f4'), ('follicle_y', 'f4'), ('tip_x', 'f4'),
             ('tip_y', 'f4'), ('pixel_length', 'i4'), ('length', 'f4'),
             ('score', 'f4'), ('angle', 'f4'), ('curvature', 'f4'),
-            ('face_x', 'f4'), ('face_y', 'f4'), ('label', 'i4')
-        ], chunks=(1000,), append_dim=0)
-    
-    summary = zarr_file['summary']
-    
-    if not summary_only:
-        if 'pixels_x' not in zarr_file:
-            zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=(1000,), append_dim=0)
-        if 'pixels_y' not in zarr_file:
-            zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=(1000,), append_dim=0)
-        pixels_x = zarr_file['pixels_x']
-        pixels_y = zarr_file['pixels_y']
+            ('face_x', 'i4'), ('face_y', 'i4'), ('face_side', 'S6'), ('label', 'i4')
+        ], chunks=chunk_size)
 
-    for frame, frame_whiskers in list(whiskers.items()):
-        for whisker_id, wseg in list(frame_whiskers.items()):
-            summary_data = {
-                'chunk_start': chunk_start,
-                'fid': wseg.time + chunk_start,
-                'wid': wseg.id,
-                'pixel_length': len(wseg.x)
-            }
+    # if 'pixels_x' not in zarr_file:
+    #     zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=chunk_size)
+    # if 'pixels_y' not in zarr_file:
+    #     zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=chunk_size)
 
-            if measurements_filename is not None:
-                summary_data.update({
-                    'length': measurements[measurements_idx][3],
-                    'score': measurements[measurements_idx][4],
-                    'angle': measurements[measurements_idx][5],
-                    'curvature': measurements[measurements_idx][6],
-                    'follicle_x': measurements[measurements_idx][7],
-                    'follicle_y': measurements[measurements_idx][8],
-                    'tip_x': measurements[measurements_idx][9],
-                    'tip_y': measurements[measurements_idx][10],
-                    'label': 0,
-                    'face_x': M._measurements.contents.face_x,
-                    'face_y': M._measurements.contents.face_y
-                })
-                measurements_idx += 1
-            else:
-                summary_data.update({
+    # if 'pixels_x' not in zarr_file:
+    #     zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.Blosc(), chunks=chunk_size)
+    # if 'pixels_y' not in zarr_file:
+    #     zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.Blosc(), chunks=chunk_size)
+
+    if 'pixels_x' not in zarr_file:
+        zarr_file.create_dataset('pixels_x', shape=(0,), dtype='f8', chunks=chunk_size)
+        zarr_file.create_dataset('pixels_x_indices', shape=(0, 2), dtype='i4', chunks=chunk_size)
+    if 'pixels_y' not in zarr_file:
+        zarr_file.create_dataset('pixels_y', shape=(0,), dtype='f8', chunks=chunk_size)
+        zarr_file.create_dataset('pixels_y_indices', shape=(0, 2), dtype='i4', chunks=chunk_size)
+
+    return zarr_file
+
+# def serialize_to_blob(data):
+#     return np.void(np.array(data).tobytes())
+
+# def deserialize_from_blob(blob):
+#     return np.frombuffer(blob, dtype=np.float64)  # Assuming original data is float64
+
+def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurements_filename=None, face_side='NA', chunk_size=(1000,), summary_only=False):
+    """
+    Fast function to append whiskers to a Zarr file. 
+    Note that this function does not support parallel writing to the same Zarr file (at least for the pixels_x and pixels_y arrays).
+    """
+    logging.debug(f'Starting append_whiskers_to_zarr with whisk_filename={whisk_filename}, zarr_filename={zarr_filename}, chunk_start={chunk_start}')
+
+    try:
+        whiskers = wfile_io.Load_Whiskers(whisk_filename)
+        nwhisk = np.sum(list(map(len, list(whiskers.values()))))
+
+        if measurements_filename is not None:
+            logging.debug(f'Loading measurements from {measurements_filename}')
+            M = MeasurementsTable(str(measurements_filename))
+            measurements = M.asarray()
+            measurements_idx = 0
+
+            wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
+            initial_frame_measurements = measurements[:len(wid_from_trace)]
+            wid_from_measure = initial_frame_measurements[:, 2].astype(int)
+
+            if not np.array_equal(wid_from_trace, wid_from_measure):
+                measurements = index_measurements(whiskers, measurements)
+
+        # Initialize or open Zarr file
+        zarr_file = initialize_zarr(zarr_filename, chunk_size)
+
+        summary_data_list = []
+        pixels_x_list = []
+        pixels_y_list = []
+        pixels_x_indices_list = []
+        pixels_y_indices_list = []
+
+        for frame, frame_whiskers in list(whiskers.items()):
+            for whisker_id, wseg in list(frame_whiskers.items()):
+                summary_data = {
+                    'chunk_start': chunk_start,
+                    'fid': wseg.time + chunk_start,
+                    'wid': wseg.id,
                     'follicle_x': wseg.x[-1],
                     'follicle_y': wseg.y[-1],
                     'tip_x': wseg.x[0],
-                    'tip_y': wseg.y[0]
-                })
+                    'tip_y': wseg.y[0],
+                    'pixel_length': len(wseg.x)
+                }
 
-            summary.append(summary_data)
-            
-            if not summary_only:
-                pixels_x.append(wseg.x.tolist())
-                pixels_y.append(wseg.y.tolist())
+                if measurements_filename is not None:
+                    summary_data.update({
+                        'follicle_x': measurements[measurements_idx][7],
+                        'follicle_y': measurements[measurements_idx][8],
+                        'tip_x': measurements[measurements_idx][9],
+                        'tip_y': measurements[measurements_idx][10],
+                        'length': measurements[measurements_idx][3],
+                        'score': measurements[measurements_idx][4],
+                        'angle': measurements[measurements_idx][5],
+                        'curvature': measurements[measurements_idx][6],
+                        'face_x': M._measurements.contents.face_x,
+                        'face_y': M._measurements.contents.face_y,
+                        'face_side': face_side,
+                        'label': 0
+                    })
+                    measurements_idx += 1
+
+                summary_data_list.append(summary_data)
+                if not summary_only:
+                    #     pixels_x_list.append(wseg.x.tolist())
+                    #     pixels_y_list.append(wseg.y.tolist())
+                    # pixels_x_list.append(serialize_to_blob(wseg.x))
+                    # pixels_y_list.append(serialize_to_blob(wseg.y))
+                    start_x = len(pixels_x_list)
+                    start_y = len(pixels_y_list)
+                    pixels_x_list.extend(wseg.x.tolist())
+                    pixels_y_list.extend(wseg.y.tolist())
+                    end_x = len(pixels_x_list)
+                    end_y = len(pixels_y_list)
+                    pixels_x_indices_list.append([start_x, end_x])
+                    pixels_y_indices_list.append([start_y, end_y])
+
+        # Append collected data to Zarr arrays
+        if summary_data_list:
+            summary_array = np.fromiter((tuple(d.values()) for d in summary_data_list), dtype=zarr_file['summary'].dtype)
+            zarr_file['summary'].append(summary_array)
+        if pixels_x_list:
+            zarr_file['pixels_x'].append(pixels_x_list)
+            zarr_file['pixels_x_indices'].append(pixels_x_indices_list)
+        #     for pixels_x in pixels_x_list:
+        #         pixels_x_str = json.dumps(pixels_x)
+        #         zarr_file['pixels_x'].append([pixels_x_str])
+        if pixels_y_list:
+            zarr_file['pixels_y'].append(pixels_y_list)
+            zarr_file['pixels_y_indices'].append(pixels_y_indices_list)
+        #     for pixels_y in pixels_y_list:
+        #         pixels_y_str = json.dumps(pixels_y)
+        #         zarr_file['pixels_y'].append([pixels_y_str])                
+                
+        # pd.DataFrame(summary_array).to_csv(f"{whisk_filename.split('.')[0]}_summary.csv", index=False)
+        logging.debug('Finished append_whiskers_to_zarr successfully')
+
+    except Exception as e:
+        logging.error(f'Error in append_whiskers_to_zarr: {e}', exc_info=True)
+
+def write_whiskers_to_tmp(whisk_filename, measurements_filename, chunk_start, face_side):
+    """
+    Function to process whisker data and write it to a temporary file.
     
-    zarr_file.flush()
+    Example usage:
+    whiskers_files = [...]  # List of whiskers files
+    measurement_files = [...]  # List of measurement files
+    output_file = "output.zarr"
+    chunk_starts = [...]  # List of chunk start positions
+    sides = [...]  # List of face sides
 
+    with ProcessPoolExecutor() as executor:
+        temp_files = list(executor.map(process_data, whiskers_files, 
+                            measurement_files, chunk_starts, sides))  
+    """
+    try:
+        whiskers = wfile_io.Load_Whiskers(whisk_filename)
+        processed_data = {
+            'summary_data': [],
+            'pixels_x': [],
+            'pixels_y': []
+        }
+
+        if measurements_filename is not None:
+            M = MeasurementsTable(str(measurements_filename))
+            measurements = M.asarray()
+            measurements_idx = 0
+
+            wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
+            initial_frame_measurements = measurements[:len(wid_from_trace)]
+            wid_from_measure = initial_frame_measurements[:, 2].astype(int)
+
+            if not np.array_equal(wid_from_trace, wid_from_measure):
+                measurements = index_measurements(whiskers, measurements)
+
+        for frame, frame_whiskers in list(whiskers.items()):
+            for whisker_id, wseg in list(frame_whiskers.items()):
+                summary_data = {
+                    'chunk_start': chunk_start,
+                    'fid': wseg.time + chunk_start,
+                    'wid': wseg.id,
+                    'follicle_x': wseg.x[-1],
+                    'follicle_y': wseg.y[-1],
+                    'tip_x': wseg.x[0],
+                    'tip_y': wseg.y[0],
+                    'pixel_length': len(wseg.x)
+                }
+
+                if measurements_filename is not None:
+                    summary_data.update({
+                        'follicle_x': measurements[measurements_idx][7],
+                        'follicle_y': measurements[measurements_idx][8],
+                        'tip_x': measurements[measurements_idx][9],
+                        'tip_y': measurements[measurements_idx][10],
+                        'length': measurements[measurements_idx][3],
+                        'score': measurements[measurements_idx][4],
+                        'angle': measurements[measurements_idx][5],
+                        'curvature': measurements[measurements_idx][6],
+                        'face_x': M._measurements.contents.face_x,
+                        'face_y': M._measurements.contents.face_y,
+                        'face_side': face_side,
+                        'label': 0
+                    })
+                    measurements_idx += 1
+
+                processed_data['summary_data'].append(summary_data)
+                processed_data['pixels_x'].append(wseg.x.tolist())
+                processed_data['pixels_y'].append(wseg.y.tolist())
+
+        temp_filename = f"temp_{os.path.basename(whisk_filename)}.pkl"
+        with open(temp_filename, 'wb') as temp_file:
+            pickle.dump(processed_data, temp_file)
+
+        return temp_filename
+
+    except Exception as e:
+        logging.error(f"Error processing {whisk_filename}: {e}")
+        return None
+
+def write_tmp_to_zarr(zarr_filename, temp_files):
+    """
+    Function to write temporary whisker data to a Zarr file. 
+    Use it when writing whisker data in parallel to temporary files 
+    and then combining them serially into a single Zarr file.
+    
+    Example usage:
+    zarr_filename = 'test.zarr'
+    temp_files = ['temp_whiskers1.pkl', 'temp_whiskers2.pkl']
+    write_tmp_to_zarr(zarr_filename, temp_files)
+    """
+    zarr_file = initialize_zarr(zarr_filename)
+    current_x_index = 0
+    current_y_index = 0
+
+    for temp_file in temp_files:
+        if temp_file is None:
+            continue
+        with open(temp_file, 'rb') as f:
+            processed_data = pickle.load(f)
+
+        summary_data = processed_data['summary_data']
+        pixels_x = processed_data['pixels_x']
+        pixels_y = processed_data['pixels_y']
+
+        summary_array = np.fromiter((tuple(d.values()) for d in summary_data), dtype=zarr_file['summary'].dtype)
+        zarr_file['summary'].append(summary_array)
+
+        for px in pixels_x:
+            start_idx = current_x_index
+            end_idx = current_x_index + len(px)
+            zarr_file['pixels_x'].append(px)
+            zarr_file['pixels_x_indices'].append([(start_idx, end_idx)])
+            current_x_index = end_idx
+
+        for py in pixels_y:
+            start_idx = current_y_index
+            end_idx = current_y_index + len(py)
+            zarr_file['pixels_y'].append(py)
+            zarr_file['pixels_y_indices'].append([(start_idx, end_idx)])
+            current_y_index = end_idx
+
+        os.remove(temp_file)
+        
 def initialize_whisker_measurement_table():
     """Initialize tabular data to enter into WhiskerMeasurementTable, using Pandas DataFrames"""
     # Define column types
@@ -1154,8 +1345,8 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     timestamps_filename=None, monitor_video=None,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
     h5_filename=None, frame_func=None,
-    n_trace_processes=4, expectedrows=1000000,
-    verbose=True, skip_stitch=False, face='right', classify=None, 
+    n_trace_processes=4, expected_rows=1000000,
+    verbose=True, skip_stitch=False, face='NA', classify=None, 
     summary_only=False, skip_existing=False
     ):
     """Read, write, and trace each chunk, one at a time.
@@ -1171,7 +1362,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     stop_after_frame : break early, for debugging
     delete_tiffs : whether to delete tiffs after done tracing
     timestamps_filename : Where to store the timestamps
-        Only vallid for PFReader input_reader
+        Only valid for PFReader input_reader
     monitor_video : filename for a monitor video
         If None, no monitor video will be written
     monitor_video_kwargs : kwargs to pass to FFmpegWriter for monitor
@@ -1181,7 +1372,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     frame_func : function to apply to each frame
         If 'invert', will apply 255 - frame
     n_trace_processes : number of simultaneous trace processes
-    expectedrows : how to set up hdf5 file
+    expected_rows : how to set up hdf5 file
     verbose : verbose
     skip_stitch : skip the stitching phase
     face : 'left','right','top','bottom'
@@ -1227,7 +1418,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     # Setup the result file
     if not skip_stitch:
-        setup_hdf5(h5_filename, expectedrows, measure=True)
+        setup_hdf5(h5_filename, expected_rows, measure=True)
 
     # Copy the parameters files
     copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
