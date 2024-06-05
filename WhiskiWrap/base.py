@@ -20,7 +20,7 @@ import re
 import numpy as np
 import pandas as pd
 import subprocess
-import multiprocessing
+import multiprocessing as mp
 import tables
 import scipy.io
 import ctypes
@@ -30,6 +30,10 @@ import itertools
 import json
 import zarr
 # from filelock import FileLock
+# from threading import Lock
+# Initialize a lock
+# lock = Lock()
+
 import pickle
 import logging
 # Set up logging
@@ -515,44 +519,43 @@ def initialize_zarr(zarr_filename, chunk_size=(1000,)):
             ('face_x', 'i4'), ('face_y', 'i4'), ('face_side', 'S6'), ('label', 'i4')
         ], chunks=chunk_size)
 
-    # if 'pixels_x' not in zarr_file:
-    #     zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=chunk_size)
-    # if 'pixels_y' not in zarr_file:
-    #     zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.JSON(), chunks=chunk_size)
-
-    # if 'pixels_x' not in zarr_file:
-    #     zarr_file.create_dataset('pixels_x', shape=(0,), dtype=object, object_codec=zarr.Blosc(), chunks=chunk_size)
-    # if 'pixels_y' not in zarr_file:
-    #     zarr_file.create_dataset('pixels_y', shape=(0,), dtype=object, object_codec=zarr.Blosc(), chunks=chunk_size)
-
     if 'pixels_x' not in zarr_file:
         zarr_file.create_dataset('pixels_x', shape=(0,), dtype='f8', chunks=chunk_size)
-        zarr_file.create_dataset('pixels_x_indices', shape=(0, 2), dtype='i4', chunks=chunk_size)
+        zarr_file.create_dataset('pixels_x_indices', shape=(0, 5), dtype='i4', chunks=chunk_size)
     if 'pixels_y' not in zarr_file:
         zarr_file.create_dataset('pixels_y', shape=(0,), dtype='f8', chunks=chunk_size)
-        zarr_file.create_dataset('pixels_y_indices', shape=(0, 2), dtype='i4', chunks=chunk_size)
+        zarr_file.create_dataset('pixels_y_indices', shape=(0, 5), dtype='i4', chunks=chunk_size)
 
     return zarr_file
 
-# def serialize_to_blob(data):
-#     return np.void(np.array(data).tobytes())
 
-# def deserialize_from_blob(blob):
-#     return np.frombuffer(blob, dtype=np.float64)  # Assuming original data is float64
+def face_side_to_bool(face_side):
 
-def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurements_filename=None, face_side='NA', chunk_size=(1000,), summary_only=False):
+    if face_side == 'left':
+        face_side_bool = 0
+    elif face_side == 'right':
+        face_side_bool = 1
+    else:
+        face_side_bool = 2
+        
+    return face_side_bool
+
+def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurements_filename=None, 
+                            face_side='NA', chunk_size=(1000,), add_to_queue=False, summary_only=False):
     """
     Fast function to append whiskers to a Zarr file. 
     Note that this function does not support parallel writing to the same Zarr file (at least for the pixels_x and pixels_y arrays).
     """
     logging.debug(f'Starting append_whiskers_to_zarr with whisk_filename={whisk_filename}, zarr_filename={zarr_filename}, chunk_start={chunk_start}')
-
+    
+    face_side_bool = face_side_to_bool(face_side)
+    
     try:
         whiskers = wfile_io.Load_Whiskers(whisk_filename)
         nwhisk = np.sum(list(map(len, list(whiskers.values()))))
 
         if measurements_filename is not None:
-            logging.debug(f'Loading measurements from {measurements_filename}')
+            # logging.debug(f'Loading measurements from {measurements_filename}')
             M = MeasurementsTable(str(measurements_filename))
             measurements = M.asarray()
             measurements_idx = 0
@@ -565,7 +568,8 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
                 measurements = index_measurements(whiskers, measurements)
 
         # Initialize or open Zarr file
-        zarr_file = initialize_zarr(zarr_filename, chunk_size)
+        if not add_to_queue:
+            zarr_file = initialize_zarr(zarr_filename, chunk_size)
 
         summary_data_list = []
         pixels_x_list = []
@@ -587,6 +591,7 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
                 }
 
                 if measurements_filename is not None:
+                    # logging.debug(f'Loading measurements from {measurements_filename}')
                     summary_data.update({
                         'follicle_x': measurements[measurements_idx][7],
                         'follicle_y': measurements[measurements_idx][8],
@@ -605,35 +610,43 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
 
                 summary_data_list.append(summary_data)
                 if not summary_only:
-                    #     pixels_x_list.append(wseg.x.tolist())
-                    #     pixels_y_list.append(wseg.y.tolist())
-                    # pixels_x_list.append(serialize_to_blob(wseg.x))
-                    # pixels_y_list.append(serialize_to_blob(wseg.y))
-                    start_x = len(pixels_x_list)
-                    start_y = len(pixels_y_list)
-                    pixels_x_list.extend(wseg.x.tolist())
-                    pixels_y_list.extend(wseg.y.tolist())
-                    end_x = len(pixels_x_list)
-                    end_y = len(pixels_y_list)
-                    pixels_x_indices_list.append([start_x, end_x])
-                    pixels_y_indices_list.append([start_y, end_y])
+                    # Simultaneous retrieval of data
+                    pixels_x_list_temp, pixels_y_list_temp = wseg.x.tolist(), wseg.y.tolist()
+                
+                    # Calculate start and end indices
+                    # start_x, start_y = len(pixels_x_list), len(pixels_y_list)
+                    # end_x, end_y = start_x + len(pixels_x_list_temp), start_y + len(pixels_y_list_temp)
+                    start_x, start_y, end_x, end_y = len(pixels_x_list), len(pixels_y_list), len(pixels_x_list) + len(pixels_x_list_temp), len(pixels_y_list) + len(pixels_y_list_temp)
 
+                    # Extend pixels lists
+                    pixels_x_list.extend(pixels_x_list_temp)
+                    pixels_y_list.extend(pixels_y_list_temp)
+
+                    # Append frame id, face side, and whisker id along with start and end indices
+                    pixels_x_indices_list.append([wseg.time + chunk_start, face_side_bool, wseg.id, start_x, end_x])
+                    pixels_y_indices_list.append([wseg.time + chunk_start, face_side_bool, wseg.id, start_y, end_y])
+                    
         # Append collected data to Zarr arrays
-        if summary_data_list:
-            summary_array = np.fromiter((tuple(d.values()) for d in summary_data_list), dtype=zarr_file['summary'].dtype)
-            zarr_file['summary'].append(summary_array)
-        if pixels_x_list:
-            zarr_file['pixels_x'].append(pixels_x_list)
-            zarr_file['pixels_x_indices'].append(pixels_x_indices_list)
-        #     for pixels_x in pixels_x_list:
-        #         pixels_x_str = json.dumps(pixels_x)
-        #         zarr_file['pixels_x'].append([pixels_x_str])
-        if pixels_y_list:
-            zarr_file['pixels_y'].append(pixels_y_list)
-            zarr_file['pixels_y_indices'].append(pixels_y_indices_list)
-        #     for pixels_y in pixels_y_list:
-        #         pixels_y_str = json.dumps(pixels_y)
-        #         zarr_file['pixels_y'].append([pixels_y_str])                
+        if add_to_queue:
+            result = (summary_data_list, pixels_x_list, pixels_x_indices_list, pixels_y_list, pixels_y_indices_list)
+            logging.debug(f"Prepared result: {len(summary_data_list)} summary records, {len(pixels_x_list)} pixels_x, {len(pixels_y_list)} pixels_y")
+            return result
+        else:
+            if summary_data_list:
+                summary_array = np.fromiter((tuple(d.values()) for d in summary_data_list), dtype=zarr_file['summary'].dtype)
+                zarr_file['summary'].append(summary_array)
+            if pixels_x_list:
+                zarr_file['pixels_x'].append(pixels_x_list)
+                zarr_file['pixels_x_indices'].append(pixels_x_indices_list)
+            #     for pixels_x in pixels_x_list:
+            #         pixels_x_str = json.dumps(pixels_x)
+            #         zarr_file['pixels_x'].append([pixels_x_str])
+            if pixels_y_list:
+                zarr_file['pixels_y'].append(pixels_y_list)
+                zarr_file['pixels_y_indices'].append(pixels_y_indices_list)
+            #     for pixels_y in pixels_y_list:
+            #         pixels_y_str = json.dumps(pixels_y)
+            #         zarr_file['pixels_y'].append([pixels_y_str])                
                 
         # pd.DataFrame(summary_array).to_csv(f"{whisk_filename.split('.')[0]}_summary.csv", index=False)
         logging.debug('Finished append_whiskers_to_zarr successfully')
@@ -975,7 +988,7 @@ def pipeline_trace(input_vfile, h5_filename,
 
         # trace each
         print("Tracing")
-        pool = multiprocessing.Pool(n_trace_processes)
+        pool = mp.Pool(n_trace_processes)
         trace_res = pool.map(trace_chunk,
             [os.path.join(input_dir, chunk_name)
                 for chunk_name in chunk_names])
@@ -984,7 +997,7 @@ def pipeline_trace(input_vfile, h5_filename,
         # take measurements:
         if measure:
             print("Measuring")
-            pool = multiprocessing.Pool(n_trace_processes)
+            pool = mp.Pool(n_trace_processes)
             meas_res = pool.map(measure_chunk_star,
                 list(zip([os.path.join(input_dir, whisk_name)
                     for whisk_name in whisk_names],itertools.repeat(face))))
@@ -1094,7 +1107,7 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
 
     # trace each
     print("Tracing")
-    pool = multiprocessing.Pool(n_trace_processes)
+    pool = mp.Pool(n_trace_processes)
     trace_res = pool.map(trace_chunk, tif_sorted_filenames)
     pool.close()
 
@@ -1181,7 +1194,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     ## Set up the worker pool
     # Pool of trace workers
-    trace_pool = multiprocessing.Pool(n_trace_processes)
+    trace_pool = mp.Pool(n_trace_processes)
 
     # Keep track of results
     trace_pool_results = []
@@ -1454,7 +1467,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
             ## Set up the worker pool
             # Pool of trace workers
-            trace_pool = multiprocessing.Pool(n_trace_processes)
+            trace_pool = mp.Pool(n_trace_processes)
 
             # Keep track of results
             deleted_tiffs = []
@@ -1699,7 +1712,7 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
 
     ## Set up the worker pool
     # Pool of trace workers
-    trace_pool = multiprocessing.Pool(n_trace_processes)
+    trace_pool = mp.Pool(n_trace_processes)
 
     # Keep track of results
     trace_pool_results = []
