@@ -26,9 +26,13 @@ import scipy.io
 import ctypes
 import time
 import shutil
+import tempfile
 import itertools
 import json
 import zarr
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 # from filelock import FileLock
 # from threading import Lock
 # Initialize a lock
@@ -37,7 +41,7 @@ import zarr
 import pickle
 import logging
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # from . import wfile_io
 # from .mfile_io import MeasurementsTable
@@ -121,6 +125,34 @@ class WhiskerSeg_measure(tables.IsDescription):
     # Adding a new face_side field
     face_side = tables.StringCol(itemsize=6)
     # Face side is a string, either 'left', 'right', 'top' or 'bottom'. Default is 'NA'.
+
+def define_parquet_schema(class_definition):
+    """
+    Define the Parquet schema based on a PyTables IsDescription class.
+    
+    Parameters:
+    - class_definition: The PyTables IsDescription class (e.g., WhiskerSeg or WhiskerSeg_measure)
+    
+    Returns:
+    - schema: A PyArrow schema object
+    """
+    fields = []
+    for field_name, field_type in class_definition.columns.items():
+        if isinstance(field_type, tables.UInt32Col):
+            fields.append((field_name, pa.uint32()))
+        elif isinstance(field_type, tables.UInt16Col):
+            fields.append((field_name, pa.uint16()))
+        elif isinstance(field_type, tables.Float32Col):
+            fields.append((field_name, pa.float32()))
+        elif isinstance(field_type, tables.Int32Col):
+            fields.append((field_name, pa.int32()))
+        elif isinstance(field_type, tables.StringCol):
+            fields.append((field_name, pa.string()))
+        else:
+            raise TypeError(f"Unsupported PyTables data type for field '{field_name}'")
+
+    schema = pa.schema(fields)
+    return schema
 
 def write_chunk(chunk, chunkname, directory='.'):
     tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
@@ -207,7 +239,7 @@ def measure_chunk(whiskers_filename, face, delete_when_done=False):
 
     return {'whiskers_filename': whiskers_filename, 'stdout': stdout, 'stderr': stderr}
 
-def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right', classify=None):
+def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right', classify=None, temp_dir=None):
     """Run trace on an input file
 
     First we create a whiskers filename from `video_filename`, which is
@@ -340,56 +372,38 @@ def setup_hdf5(h5_filename, expected_rows, measure=False):
 
     h5file.close()
 
-def index_measurements(whiskers,measurements):
-    print("classify was run on the measurements file")
-
-    # We get all the whisker ids from the whiskers dictionary. Since ids are not unique (they repeat for each frame),
-    # we also get the frame number, to get a unique set of identifiers. 
-    # whisker_id_set = [] 
-    # for frame, frame_whiskers in list(whiskers.items()):
-    #     for whisker_id, wseg in list(frame_whiskers.items()):
-    #         whisker_id_set.append([frame, wseg.id])
-
-    # # Convert to set for faster lookup
-    # whisker_id_set = set(whisker_id_set)
-    whisker_id_set = set() 
-    for frame, frame_whiskers in whiskers.items():
-        for whisker_id, wseg in frame_whiskers.items():
-            whisker_id_set.add((frame, wseg.id))
-
-    # Then, get all the same data from the measurements dictionary (converting to int)
-    measurement_ids = []
-    for measurement in measurements:
-        measurement_ids.append((int(measurement[1]), int(measurement[2])))
-
-    # Convert to dictionary for faster lookup
-    measurement_ids_dict = {id: idx for idx, id in enumerate(measurement_ids)}
-
-    # Now, match the whisker ids from the whiskers dictionary to the whisker ids from the measurements dictionary
-    # This is done by matching the frame number and the whisker id
-    # The result is a list of indices that can be used to index the measurements array
-    measurements_reidx = []
-    for whisker_id in whisker_id_set:
-        idx = measurement_ids_dict.get(whisker_id, -1)
-        measurements_reidx.append(idx)
-    # for whisker_id in whisker_id_set:
-    #     for idx, measurement_id in enumerate(measurement_ids):
-    #         if measurement_id == whisker_id:
-    #             measurements_reidx.append(idx)
-    #             break
-    #     # if the whisker was not found in the measurements array, then it was removed by classify
-    #     # so we add a -1 to the measurements_reidx list
-    #     if measurement_id != whisker_id:
-    #         measurements_reidx.append(-1)
-
-    # Find the indices of the measurements that are -1
-    removed_idx = [i for i, x in enumerate(measurements_reidx) if x == -1]
-    print("Number of whiskers removed by classify: ", len(removed_idx))
-
-    # Now, we can index the measurements array using the indices in measurements_reidx
-    measurements = measurements[measurements_reidx]
+def index_measurements(whiskers, measurements):
+    """
+    Re-indexing the measurements array according to whisker segment IDs and frame IDs in whiskers
+    """    
+    # We get all the segment ids from the whiskers dictionary. Since ids are not unique (they repeat for each frame), we also get the frame number, to get a unique set of identifiers. 
     
-    return measurements
+    # Create a list of (frame, segment_id) tuples from the whiskers dictionary
+    segment_id_list = [(frame, wseg.id) for frame, frame_whiskers in whiskers.items() for wseg in frame_whiskers.values()]
+
+    # Create a dictionary to map (frame, segment_id) to the corresponding index in the measurements array
+    measurement_ids_dict = {(int(m[1]), int(m[2])): idx for idx, m in enumerate(measurements)}
+
+    # Re-index the measurements array based on the order of segment_id_list
+    # This is done by matching the frame number and the segment id. The result is a list of indices that can be used to index the measurements array
+    measurements_reidx = []
+    for segment_id in segment_id_list:
+        # Find the corresponding index in the measurements array
+        idx = measurement_ids_dict.get(segment_id, -1)
+        measurements_reidx.append(idx)
+
+    # Report how many whiskers were removed
+    removed_count = measurements_reidx.count(-1)
+    print(f"Number of whiskers removed by classify: {removed_count}")
+
+    # Handle missing whiskers (where idx is -1)
+    # valid_indices = [idx for idx in measurements_reidx if idx != -1]
+    # measurements_reindexed = measurements[valid_indices]
+    
+    measurements_reindexed = measurements[measurements_reidx]   
+
+    return measurements_reindexed
+
               
 def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measurements_filename=None, summary_only=False, face_side='NA'):
     """Load data from whisk_file and put it into an hdf5 file
@@ -507,6 +521,186 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
     # except Exception as e:
         # logging.error(f'Error in append_whiskers_to_hdf5: {e}', exc_info=True)
 
+def process_and_write_parquet(whiskers_filename, chunk_start, face_side, temp_dir):
+    # Generate the .whiskers filename - whiskers_filename may be a .tif file at this point
+    if not whiskers_filename.endswith('.whiskers'):
+        whiskers_filename = whiskers_filename.replace('.tif', '.whiskers')
+    
+    # Generate the corresponding .measurements filename
+    measurements_filename = whiskers_filename.replace('.whiskers', '.measurements')
+    # Check that that file exists. If not, set to None
+    if not os.path.exists(measurements_filename):
+        measurements_filename = None
+    
+    # Generate unique filename for each chunk
+    temp_file = os.path.join(temp_dir, f'chunk_{chunk_start}.parquet')
+        
+    # Call the function to append whiskers to the parquet file
+    append_whiskers_to_parquet(
+        whisk_filename=whiskers_filename,
+        measurements_filename=measurements_filename,
+        parquet_filename=temp_file,
+        chunk_start=chunk_start,
+        summary_only=False,
+        face_side=face_side
+    )
+
+def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_filename, chunk_start, summary_only=False, face_side='NA'):
+    """
+    Append whiskers and measurements data to a Parquet file.
+
+    Parameters:
+    - whisk_filename: The .whiskers file containing whisker trace data.
+    - measurements_filename: The .measurements file containing additional measurement data.
+    - parquet_filename: The output Parquet file to append to.
+    - chunk_start: The starting frame index for this chunk.
+    """
+    # Load whiskers data
+    whiskers = wfile_io.Load_Whiskers(whisk_filename)
+    nwhisk = np.sum(list(map(len, list(whiskers.values()))))
+
+    # Load measurements data if available
+    if measurements_filename is not None:
+        M = MeasurementsTable(str(measurements_filename))
+        measurements = M.asarray()
+        measurements_idx = 0
+
+        # Check if measurements need to be reindexed
+        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
+        initial_frame_measurements = measurements[:len(wid_from_trace)]
+        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
+
+        if not np.array_equal(wid_from_trace, wid_from_measure):
+            measurements = index_measurements(whiskers, measurements)
+    else:
+        measurements = None
+
+    # Prepare data for Parquet
+    summary_data = []
+    if not summary_only:
+        pixels_x_data = []
+        pixels_y_data = []
+
+    for _, frame_whiskers in whiskers.items():
+        for _, wseg in frame_whiskers.items():
+            whisker_data = {
+                'chunk_start': chunk_start,
+                'fid': wseg.time + chunk_start,
+                'wid': wseg.id                
+            }
+
+            if measurements is not None:
+                whisker_data.update({
+                    'length': measurements[measurements_idx][3],
+                    'score': measurements[measurements_idx][4],
+                    'angle': measurements[measurements_idx][5],
+                    'curvature': measurements[measurements_idx][6],
+                    'pixel_length': len(wseg.x),
+                    'follicle_x': measurements[measurements_idx][7],
+                    'follicle_y': measurements[measurements_idx][8],
+                    'tip_x': measurements[measurements_idx][9],
+                    'tip_y': measurements[measurements_idx][10],
+                    'label': 0,
+                    'face_x': M._measurements.contents.face_x,
+                    'face_y': M._measurements.contents.face_y,
+                    'face_side': face_side
+                })
+                measurements_idx += 1
+            else:
+                whisker_data.update({
+                    'follicle_x': wseg.x[-1],
+                    'follicle_y': wseg.y[-1],
+                    'tip_x': wseg.x[0],
+                    'tip_y': wseg.y[0]
+                })
+
+            summary_data.append(whisker_data)
+            if not summary_only:
+                pixels_x_data.append(wseg.x.tolist())
+                pixels_y_data.append(wseg.y.tolist())
+
+    # # Convert to Pandas DataFrames
+    # summary_df = pd.DataFrame(summary_data)
+    # if not summary_only:
+    #     pixels_x_df = pd.DataFrame({'pixels_x': pixels_x_data})
+    #     pixels_y_df = pd.DataFrame({'pixels_y': pixels_y_data})
+    
+    # # Define the schema for WhiskerSeg_measure
+    # whisker_seg_measure_schema = define_parquet_schema(WhiskerSeg_measure)
+
+    # # Write to Parquet using PyArrow
+    # with pq.ParquetWriter(parquet_filename, schema=whisker_seg_measure_schema) as writer:
+    #     if not summary_df.empty:
+    #         table_summary = pa.Table.from_pandas(summary_df, schema=whisker_seg_measure_schema)
+    #         writer.write_table(table_summary)
+    #     if not summary_only:
+    #         if not pixels_x_df.empty:
+    #             table_pixels_x = pa.Table.from_pandas(pixels_x_df)
+    #             writer.write_table(table_pixels_x)
+
+    #         if not pixels_y_df.empty:
+    #             table_pixels_y = pa.Table.from_pandas(pixels_y_df)
+    #             writer.write_table(table_pixels_y)
+            
+    # Convert to Pandas DataFrame
+    summary_df = pd.DataFrame(summary_data)
+
+    if not summary_only:
+        # Ensure pixels_x_df and pixels_y_df are combined with summary_df
+        summary_df['pixels_x'] = pixels_x_data
+        summary_df['pixels_y'] = pixels_y_data
+
+    # Convert the combined DataFrame to a PyArrow Table
+    combined_table = pa.Table.from_pandas(summary_df)
+
+    # Write the combined table to the Parquet file
+    pq.write_table(combined_table, parquet_filename)
+    
+def extract_chunk_number(filename):
+    """
+    Extract the chunk number from a filename.
+    """
+    # Assuming the filename pattern is 'chunk_<number>.<file_extension>'
+    base_name = os.path.basename(filename)
+    # Get file extension
+    file_extension = base_name.split('.')[-1]    
+    # Extract the number between 'chunk_' and '.<file_extension>'
+    chunk_number = int(base_name.replace('chunk_', '').replace(f'.{file_extension}', ''))
+    return chunk_number
+
+def merge_parquet_files(temp_dir, output_filename):
+    """
+    Merge all Parquet files in the temporary directory into a single Parquet file.
+    """
+    # List all Parquet files in the temporary directory
+    parquet_files = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith('.parquet')]
+    
+    # Sort the files based on the extracted chunk number
+    parquet_files_sorted = sorted(parquet_files, key=extract_chunk_number)
+
+    # Read all Parquet files into a list of tables
+    tables = [pq.read_table(f) for f in parquet_files_sorted]
+
+    # Concatenate all tables
+    combined_table = pa.concat_tables(tables)
+
+    # Write the combined table to the final Parquet file
+    pq.write_table(combined_table, output_filename)
+    
+def process_and_write_zarr(fn, chunk_start, output_dir):
+    # Example function for direct Zarr writing
+    whisk_filename, measurements_filename = fn.whiskers, fn.measurements
+    append_whiskers_to_zarr(
+        whisk_filename=whisk_filename,
+        measurements_filename=measurements_filename,
+        zarr_filename=output_dir,
+        chunk_start=chunk_start
+    )
+
+def consolidate_zarr_metadata(zarr_dir):
+    # Function to consolidate Zarr metadata
+    zarr.consolidate_metadata(zarr_dir)
+    
 def initialize_zarr(zarr_filename, chunk_size=(1000,)):
     zarr_file = zarr.open(zarr_filename, mode='a')
 
@@ -528,7 +722,6 @@ def initialize_zarr(zarr_filename, chunk_size=(1000,)):
 
     return zarr_file
 
-
 def face_side_to_bool(face_side):
 
     if face_side == 'left':
@@ -546,7 +739,7 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
     Fast function to append whiskers to a Zarr file. 
     Note that this function does not support parallel writing to the same Zarr file (at least for the pixels_x and pixels_y arrays).
     """
-    logging.debug(f'Starting append_whiskers_to_zarr with whisk_filename={whisk_filename}, zarr_filename={zarr_filename}, chunk_start={chunk_start}')
+    # logging.debug(f'Starting append_whiskers_to_zarr with whisk_filename={whisk_filename}, zarr_filename={zarr_filename}, chunk_start={chunk_start}')
     
     face_side_bool = face_side_to_bool(face_side)
     
@@ -629,7 +822,7 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
         # Append collected data to Zarr arrays
         if add_to_queue:
             result = (summary_data_list, pixels_x_list, pixels_x_indices_list, pixels_y_list, pixels_y_indices_list)
-            logging.debug(f"Prepared result: {len(summary_data_list)} summary records, {len(pixels_x_list)} pixels_x, {len(pixels_y_list)} pixels_y")
+            # logging.debug(f"Prepared result: {len(summary_data_list)} summary records, {len(pixels_x_list)} pixels_x, {len(pixels_y_list)} pixels_y")
             return result
         else:
             if summary_data_list:
@@ -649,7 +842,7 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
             #         zarr_file['pixels_y'].append([pixels_y_str])                
                 
         # pd.DataFrame(summary_array).to_csv(f"{whisk_filename.split('.')[0]}_summary.csv", index=False)
-        logging.debug('Finished append_whiskers_to_zarr successfully')
+        # logging.debug('Finished append_whiskers_to_zarr successfully')
 
     except Exception as e:
         logging.error(f'Error in append_whiskers_to_zarr: {e}', exc_info=True)
@@ -783,7 +976,7 @@ def initialize_whisker_measurement_table():
     column_types = {
         'frame_id': 'uint32',
         'whisker_id': 'uint16',
-        'label': 'uint16',
+        'label': 'int16',
         'face_x': 'int32',
         'face_y': 'int32',
         'length': 'float32',
@@ -807,7 +1000,8 @@ def read_whisker_data(filename, output_format='dict'):
     Parameter: filename (str) - path to whisker file.
     Accepts hdf5 and .whiskers files. If the latter, it will look for a .measurements file in the same directory.
     Returns a dictionary with the following keys:
-        'whisker_id' - list of whisker ids
+        'whisker_id' - list of whisker segment ids
+        'label' - list of labels (segment id, or if re-classified, initial guess of segment identities)
         'frame_id' - list of frame ids
         'follicle_x' - list of follicle x coordinates
         'follicle_y' - list of follicle y coordinates
@@ -820,7 +1014,6 @@ def read_whisker_data(filename, output_format='dict'):
         'curvature' - list of curvatures
         'face_x' - list of face x coordinates
         'face_y' - list of face y coordinates
-        'label' - list of labels
         'chunk_start' - list of chunk start indices
     """    
     if filename is None:
@@ -851,6 +1044,7 @@ def read_whisker_data(filename, output_format='dict'):
         wid_from_measure = initial_frame_measurements[:, 2].astype(int)
 
         if not np.array_equal(wid_from_trace, wid_from_measure):
+            print("classify was run on the measurements file")
             measurements=index_measurements(whiskers,measurements)
 
         meas_rows = []
@@ -864,7 +1058,7 @@ def read_whisker_data(filename, output_format='dict'):
                 new_meas_row = {
                     'frame_id': wseg.time + chunk_start,
                     'whisker_id': wseg.id,
-                    'label': measurements[measurements_idx][2],
+                    'label': measurements[measurements_idx][0].astype('int16'),
                     'face_x': M._measurements.contents.face_x,
                     'face_y': M._measurements.contents.face_y,
                     'length': measurements[measurements_idx][3],
@@ -1357,7 +1551,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     stop_after_frame=None, delete_tiffs=True,
     timestamps_filename=None, monitor_video=None,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
-    h5_filename=None, frame_func=None,
+    output_filename=None, frame_func=None,
     n_trace_processes=4, expected_rows=1000000,
     verbose=True, skip_stitch=False, face='NA', classify=None, 
     summary_only=False, skip_existing=False
@@ -1381,7 +1575,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     monitor_video_kwargs : kwargs to pass to FFmpegWriter for monitor
     write_monitor_ffmpeg_stderr_to_screen : whether to display
         output from ffmpeg writing instance
-    h5_filename : hdf5 file to stitch whiskers information into
+    output_filename : hdf5, zarr or parquet file to stitch whiskers information into
     frame_func : function to apply to each frame
         If 'invert', will apply 255 - frame
     n_trace_processes : number of simultaneous trace processes
@@ -1420,18 +1614,21 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     ## Initialize readers and writers
     if verbose:
-        print("Initalizing readers and writers")
+        print("Initializing readers and writers")
 
     # Tiff writer
     ctw = WhiskiWrap.ChunkedTiffWriter(tiffs_to_trace_directory,
         chunk_size=chunk_size, chunk_name_pattern=chunk_name_pattern)
 
-    # FFmpeg writer is initalized after first frame
+    # FFmpeg writer is initialized after first frame
     ffw = None
 
     # Setup the result file
     if not skip_stitch:
-        setup_hdf5(h5_filename, expected_rows, measure=True)
+        if output_filename.endswith('.hdf5'):
+            setup_hdf5(output_filename, expected_rows, measure=True)
+        elif output_filename.endswith('.zarr'):
+            initialize_zarr(output_filename, (chunk_size,))
 
     # Copy the parameters files
     copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
@@ -1447,7 +1644,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         # existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endswith('.measurements')]
 
         if len(existing_files) > 0:
-            print("Existing files found, skipping to HDF5 stitching")
+            print("Existing files found, skipping to stitching")
             # create sorted_file_numbers, sorted_filenames
             # Keep only the .whiskers files in the list
             split_traced_filenames = [os.path.split(fn)[1] for fn in existing_files]
@@ -1472,7 +1669,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             # Keep track of results
             deleted_tiffs = []
             def log_result(result):
-                print("Result logged:", result)  # Verify the callback
+                print("Result logged:", result)
                 trace_pool_results.append(result)
 
             ## Iterate over chunks
@@ -1481,6 +1678,11 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
             # Init the iterator outside of the loop so that it persists
             iter_obj = input_reader.iter_frames()
+
+            if output_filename.endswith('.zarr'):
+                temp_dir = tempfile.mkdtemp()
+            else:
+                temp_dir = None
 
             while not out_of_frames:
                 # Get a chunk of frames
@@ -1518,7 +1720,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
                 # Start trace
                 try:
-                    trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify), callback=log_result)
+                    trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify, temp_dir), callback=log_result)
                 except Exception as e:
                     print("Error in apply_async:", e)
 
@@ -1606,18 +1808,58 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
     if not skip_stitch:
         print("Stitching")
         zobj = list(zip(sorted_file_numbers, sorted_filenames))
-        for chunk_start, chunk_name in zobj:
-            # Append each chunk to the hdf5 file
-            if chunk_name.endswith('.tif'):
-                fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
-            elif chunk_name.endswith('.whiskers'):
-                fn = WhiskiWrap.utils.FileNamer.from_whiskers(chunk_name)
-            append_whiskers_to_hdf5(
-                whisk_filename=fn.whiskers,
-		        measurements_filename = fn.measurements,
-                h5_filename=h5_filename,
-                chunk_start=chunk_start,
-                summary_only=summary_only)
+        # if output_filename contains h5
+        if output_filename.endswith('.hdf5'):
+            for chunk_start, chunk_name in zobj:
+                # Append each chunk to the hdf5 file
+                if chunk_name.endswith('.tif'):
+                    fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+                elif chunk_name.endswith('.whiskers'):
+                    fn = WhiskiWrap.utils.FileNamer.from_whiskers(chunk_name)
+                append_whiskers_to_hdf5(
+                    whisk_filename=fn.whiskers,
+                    measurements_filename = fn.measurements,
+                    h5_filename=output_filename,
+                    chunk_start=chunk_start,
+                    summary_only=summary_only,
+                    face_side=face)
+                
+        elif output_filename.endswith('.parquet'):
+            # Create a temporary directory to store the chunk Parquet files
+            temp_dir = tempfile.mkdtemp()
+
+            try:
+                # Parallel processing to write each chunk to its own Parquet file
+                with mp.Pool() as pool:
+                    pool.starmap(
+                        process_and_write_parquet, 
+                        [(whiskers_filename, chunk_start, face, temp_dir) for chunk_start, whiskers_filename in zobj]
+                    )
+                
+                # Merge all chunk Parquet files into the final output Parquet file
+                merge_parquet_files(temp_dir, output_filename)
+            finally:
+                # Clean up the temporary directory
+                shutil.rmtree(temp_dir)
+                
+        elif output_filename.endswith('.zarr'):
+            # Direct parallel writing to Zarr with consolidated metadata
+            with mp.Pool() as pool:
+                pool.starmap(
+                    process_and_write_zarr, 
+                    [(fn, chunk_start, output_filename) for chunk_start, fn in zobj]
+                )
+            # Consolidate Zarr metadata
+            consolidate_zarr_metadata(output_filename)
+        # elif output_filename.endswith('.zarr'): 
+        #     append_whiskers_to_zarr(
+        #         whisk_filename=fn.whiskers,
+        #         measurements_filename=fn.measurements,
+        #         zarr_filename=output_filename,
+        #         chunk_start=chunk_start,
+        #         summary_only=summary_only)
+    
+            
 
     # Finalize writers
     ctw.close()
