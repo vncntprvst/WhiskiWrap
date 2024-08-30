@@ -9,5 +9,6 @@ statsmodels
 ffmpeg-python >= 0.2.0
 whisk-janelia[ffmpeg] #@ git+https://github.com/vncntprvst/whisk.git
 zarr
+pyarrow
 
 # Usage: pip install -r requirements.txt
