@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.1.12',
+   version='1.2.0',
    author='Chris Rodgers',
    author_email='',
    maintainer=', '.join(['cxrodgers','aiporre','vncntprvst']),
@@ -24,7 +24,8 @@ setup(
       'statsmodels',
       'ffmpeg-python>=0.2.0',
       'whisk-janelia[ffmpeg]',
-      'zarr'
+      'zarr',
+      'pyarrow',
       ],
    include_package_data=True,
 )
