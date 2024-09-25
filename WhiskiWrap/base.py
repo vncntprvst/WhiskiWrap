@@ -1868,8 +1868,9 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 # Merge all chunk Parquet files into the final output Parquet file
                 merge_parquet_files(temp_dir, output_filename)
             finally:
-                # Clean up the temporary directory
-                shutil.rmtree(temp_dir)
+                # Clean up the temporary directory if it exists
+                if temp_dir in locals() and temp_dir is not None:
+                    shutil.rmtree(temp_dir)
                 
         elif output_filename.endswith('.zarr'):
             # Direct parallel writing to Zarr with consolidated metadata
