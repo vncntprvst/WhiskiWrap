@@ -28,7 +28,7 @@ import time
 import shutil
 import tempfile
 import itertools
-import json
+# import json
 import zarr
 import pandas as pd
 import pyarrow as pa
@@ -854,15 +854,10 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
             if pixels_x_list:
                 zarr_file['pixels_x'].append(pixels_x_list)
                 zarr_file['pixels_x_indices'].append(pixels_x_indices_list)
-            #     for pixels_x in pixels_x_list:
-            #         pixels_x_str = json.dumps(pixels_x)
-            #         zarr_file['pixels_x'].append([pixels_x_str])
+
             if pixels_y_list:
                 zarr_file['pixels_y'].append(pixels_y_list)
-                zarr_file['pixels_y_indices'].append(pixels_y_indices_list)
-            #     for pixels_y in pixels_y_list:
-            #         pixels_y_str = json.dumps(pixels_y)
-            #         zarr_file['pixels_y'].append([pixels_y_str])                
+                zarr_file['pixels_y_indices'].append(pixels_y_indices_list)            
                 
         # pd.DataFrame(summary_array).to_csv(f"{whisk_filename.split('.')[0]}_summary.csv", index=False)
         # logging.debug('Finished append_whiskers_to_zarr successfully')
