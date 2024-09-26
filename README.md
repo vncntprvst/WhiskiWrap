@@ -1,11 +1,11 @@
 # WhiskiWrap
-WhiskiWrap provides tools for running whiski (http://whiskertracking.janelia.org) more easily and efficiently.
+WhiskiWrap provides tools for running [whisk](http://whiskertracking.janelia.org) more easily and efficiently.
 
-My goal is to improve whiski in the following ways:
+My goal is to improve whisk in the following ways:
 
-1. Make it more flexible about reading various input files. In my experience whiski has trouble reading certain input videos. Instead, WhiskiWrap uses your system's ffmpeg to read input files (because ffmpeg can typically read almost anything) and to generate simple tiff stacks which whiski can reliably read.
+1. Make it more flexible about reading various input files. In my experience whisk has trouble reading certain input videos. Instead, WhiskiWrap uses your system's ffmpeg to read input files (because ffmpeg can typically read almost anything) and to generate simple tiff stacks which whisk can reliably read.
 2. Make it faster, by calling many instances of `trace` in parallel on non-overlapping chunks of the input video.
-3. Make it more cross-platform and memory-efficient, by converting whiski's output files into HDF5 files which can be read by multiple programs (Python, Matlab) on any operating system. Importantly, HDF5 files can also be read partially to avoid overflowing your system's memory.
+3. Make it more cross-platform and memory-efficient, by converting whisk's output files into HDF5 files which can be read by multiple programs (Python, Matlab) on any operating system. Importantly, HDF5 files can also be read partially to avoid overflowing your system's memory.
 
 ## Example
 Note: The current best pipeline for running trace is `interleaved_reading_and_trace`, but the command `pipeline_trace` is the only one configured to run measure.
@@ -60,17 +60,17 @@ You may also add optional parameters to run the measure command
 * `face='right'` - run measure with face on right side, can also specify to 'left' side
 
 # Installation
-WhiskiWrap is written in Python and relies on `ffmpeg` for reading input videos, `tifffile` for writing tiff stacks, `whiski` for tracing whiskers in the tiff stacks, and `pytables` for creating HDF5 files with all of the results.
+WhiskiWrap is written in Python and relies on `ffmpeg` for reading input videos, `tifffile` for writing tiff stacks, `whisk` for tracing whiskers in the tiff stacks, and `pytables` for creating HDF5 files with all of the results.
 Also make sure that you have installed `ffmpeg-python>=0.2.0`.
 
 ## Installing `ffmpeg`
 First install [`ffmpeg`](https://www.ffmpeg.org/) and ensure it is available on your system path -- that is, you should be able to type `ffmpeg` in the terminal and it should find it and run it.
 
-## Installing `whiski`
-Next install [`whiski`](http://whiskertracking.janelia.org). There are several ways to do this:
+## Installing `whisk`
+Next install [`whisk`](http://whiskertracking.janelia.org). There are several ways to do this:
 
 1. Download the pre-built binary. This is the easiest path because it doesn't require compiling anything. However, you still need to make a few changes to the Python code that is downloaded in order to make it work with `WhiskiWrap`.
-2. Build `whiski` from source, using my lightly customized fork. This will probably require more trouble-shooting to make sure all of its parts are working.
+2. Build `whisk` from source, using my lightly customized fork. This will probably require more trouble-shooting to make sure all of its parts are working.
 
 To use the pre-built binary (preferred):
 1. Download the [zipped binary](http://whiskertracking.janelia.org/wiki/display/MyersLab/Whisker+Tracking+Downloads):
