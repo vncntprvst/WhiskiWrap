@@ -1666,7 +1666,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         # Any whiskers or measurements files (less precise than the pattern):
         # existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endswith('.measurements')]
 
-        if len(existing_files) > 0:
+        if len(existing_files) > 0:    
             print("Existing files found, skipping to stitching")
             # create sorted_file_numbers, sorted_filenames
             # Keep only the .whiskers files in the list
@@ -1682,6 +1682,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             ordering = np.argsort(file_numbers)
             sorted_filenames = np.array(full_filenames)[ordering]
             sorted_file_numbers = np.array(file_numbers)[ordering]
+            
         else: 
             sorted_filenames = []
             sorted_file_numbers = []
@@ -1857,19 +1858,32 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
                 
         elif output_filename.endswith('.parquet'):
             try:
-                # Parallel processing to write each chunk to its own Parquet file
-                # This is done now directly in the trace_and_measure_chunk function
-                # with mp.Pool() as pool:
-                #     pool.starmap(
-                #         process_and_write_parquet, 
-                #         [(whiskers_filename, chunk_start, face, temp_dir) for chunk_start, whiskers_filename in zobj]
-                #     )
-                
-                # Merge all chunk Parquet files into the final output Parquet file
-                merge_parquet_files(temp_dir, output_filename)
+                # Check whether the stitched file has been successfully created previously
+                if not os.path.exists(output_filename):
+                    # Then check if the chunk files need to be created first
+                    if 'temp_dir' not in locals() or \
+                        temp_dir is None or \
+                        not os.path.exists(temp_dir) or \
+                        len(os.listdir(temp_dir)) != len(sorted_filenames):
+                            # Need to create the chunk files first before merging
+                            temp_dir = tempfile.mkdtemp()
+                            # Prepare the arguments for parallel processing
+                            args_list = [(whiskers_file, extract_chunk_number(whiskers_file), face, temp_dir) for whiskers_file in sorted_filenames]
+                            with mp.Pool(n_trace_processes) as parquet_pool:
+                                parquet_pool.starmap(
+                                    process_and_write_parquet, 
+                                    args_list
+                                )
+                            
+                            # for whiskers_file in sorted_filenames:
+                            #     chunk_start = extract_chunk_number(whiskers_file)
+                            #     process_and_write_parquet(whiskers_file, chunk_start=chunk_start, face_side=face, temp_dir=temp_dir)
+                            
+                    # Merge all chunk Parquet files into the final output Parquet file
+                    merge_parquet_files(temp_dir, output_filename)
             finally:
                 # Clean up the temporary directory if it exists
-                if temp_dir in locals() and temp_dir is not None:
+                if 'temp_dir' in locals() and temp_dir is not None:
                     shutil.rmtree(temp_dir)
                 
         elif output_filename.endswith('.zarr'):
@@ -1888,8 +1902,6 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         #         zarr_filename=output_filename,
         #         chunk_start=chunk_start,
         #         summary_only=summary_only)
-    
-            
 
     # Finalize writers
     ctw.close()
