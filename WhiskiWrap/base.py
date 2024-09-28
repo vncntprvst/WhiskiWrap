@@ -1684,8 +1684,20 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             skip_existing = False
 
     if not skip_existing:
+        # Check for GPU availability at the beginning of the function
+        if wwutils.check_gpu.check_gpu_availability(min_memory_gb=4):
+            trace_function = trace_and_measure_chunk_gpu
+            print("GPU available. Using GPU-accelerated tracing.")
+        else:
+            trace_function = trace_and_measure_chunk
+            print("GPU not available or insufficient memory. Using CPU-based tracing.")
+
         ## Set up the worker pool
         # Pool of trace workers
+        if trace_function == trace_and_measure_chunk_gpu:
+            # Limit to 1 process to avoid GPU contention
+            n_trace_processes = 1
+
         trace_pool = mp.Pool(n_trace_processes)
 
         # Keep track of results
@@ -1744,10 +1756,14 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
             # Figure out which tiff file was just generated
             tif_filename = ctw.chunknames_written[-1]
-
-            # Start trace
+                
+            # Start trace using the selected trace_function
             try:
-                trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face, classify, temp_dir, convert_chunks_to), callback=log_result)
+                trace_pool.apply_async(
+                    trace_function,  # Use the selected tracing function
+                    args=(tif_filename, delete_tiffs, face, classify, temp_dir, convert_chunks_to),
+                    callback=log_result
+                )
             except Exception as e:
                 print("Error in apply_async:", e)
 

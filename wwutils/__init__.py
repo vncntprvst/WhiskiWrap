@@ -7,6 +7,7 @@ from . import stats
 from . import video
 from . import dataload
 from . import whisk_permissions
+from . import check_gpu
 
 # shortcuts
 from .misc import rint, pick, pick_rows, printnow, globjoin
