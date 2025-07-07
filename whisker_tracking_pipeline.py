@@ -14,7 +14,7 @@ and iterative development/debugging.
 
 Usage:
     python whisker_tracking_pipeline.py <input_video> [options]
-    python whisker_tracking_pipeline.py test_videos/test_video_10s.mp4 -b excerpt_video -s -p 40 -o ./test_videos/whisker_tracking
+    python whisker_tracking_pipeline.py test_videos/test_bilateral_view.mp4 -b excerpt_video -s -p 40 -o ./test_videos/whisker_tracking --steps trace
 
 Arguments:
     input_video         Path to the input video file (required)

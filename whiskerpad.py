@@ -82,15 +82,31 @@ class WhiskingParamsEncoder(json.JSONEncoder):
             # Convert WhiskingParams object to a dictionary
             params_dict = obj.__dict__.copy()
             # Convert ndarray objects to lists
-            params_dict['Location'] = params_dict['Location'].tolist()
-            params_dict['NoseTip'] = params_dict['NoseTip'].tolist()
-            # Convert numpy.int64 to int
-            params_dict['MidlineOffset'] = int(params_dict['MidlineOffset'])
+            if isinstance(params_dict['Location'], np.ndarray):
+                params_dict['Location'] = params_dict['Location'].tolist()
+            if isinstance(params_dict['NoseTip'], np.ndarray):
+                params_dict['NoseTip'] = params_dict['NoseTip'].tolist()
+            # Convert numpy types to native Python types
+            if isinstance(params_dict['MidlineOffset'], (np.int64, np.float64)):
+                params_dict['MidlineOffset'] = float(params_dict['MidlineOffset'])
+            # Convert AreaCoordinates numpy types to native Python types
+            if isinstance(params_dict['AreaCoordinates'], list):
+                params_dict['AreaCoordinates'] = [int(x) if isinstance(x, (np.int32, np.int64)) else x for x in params_dict['AreaCoordinates']]
+            # Convert RelativeLocation numpy types to native Python types
+            if isinstance(params_dict['RelativeLocation'], list):
+                params_dict['RelativeLocation'] = [float(x) if isinstance(x, (np.float64, np.float32)) else x for x in params_dict['RelativeLocation']]
+            # Convert ImageCoordinates numpy types to native Python types
+            if isinstance(params_dict['ImageCoordinates'], tuple):
+                params_dict['ImageCoordinates'] = tuple(int(x) if isinstance(x, (np.int32, np.int64)) else x for x in params_dict['ImageCoordinates'])
             # Return the updated dictionary
             return params_dict
-        if isinstance(obj, np.int64):
-            # Convert numpy.int64 to int
+        # Handle numpy types directly
+        if isinstance(obj, (np.int32, np.int64)):
             return int(obj)
+        if isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
         return super().default(obj)
 
 class FaceParams:
@@ -185,6 +201,13 @@ class WhiskerPad:
         wp = [WhiskingParams(None, None, None), WhiskingParams(None, None, None)]
         for image, f_side, im_side, side_id in zip(image_halves, face_side, image_side, range(len(image_halves))):
             wp[side_id] = WhiskerPad.find_whiskerpad(image, fp, face_side=f_side, image_side=im_side, video_dir=args.video_dir, basename=args.basename)    
+            
+            # Check if whiskerpad detection was successful
+            if wp[side_id] is None:
+                print(f"Warning: Failed to detect whiskerpad for {f_side} side. Creating default parameters.")
+                # Create default whiskerpad parameters
+                wp[side_id] = WhiskerPad.create_default_whiskerpad(image, fp, face_side=f_side, image_side=im_side)
+            
             wp[side_id].ImageSide = im_side
             # Set image coordinates as a tuple of image coordinates x, y, width, height
             if im_side == 'left' or im_side == 'top':
@@ -745,6 +768,93 @@ class WhiskerPad:
 
         return whiskerpad
 
+    @staticmethod
+    def create_default_whiskerpad(image, fp, face_side, image_side):
+        """
+        Create default whiskerpad parameters when automatic detection fails.
+        
+        This method creates reasonable default parameters based on the image dimensions
+        and face parameters, allowing the pipeline to continue even when contour detection fails.
+        
+        Parameters
+        ----------
+        image : numpy.ndarray
+            The image for which to create default whiskerpad parameters
+        fp : FaceParams
+            Face parameters object containing face orientation and nose tip
+        face_side : str
+            The side of the face ('left' or 'right')
+        image_side : str
+            The side of the image ('left', 'right', 'top', 'bottom')
+            
+        Returns
+        -------
+        WhiskingParams
+            A WhiskingParams object with default parameters
+        """
+        print(f"Creating default whiskerpad parameters for {face_side} side")
+        
+        # Create a copy of face parameters for this whiskerpad
+        fp_wp = fp.copy()
+        fp_wp.FaceSide = face_side
+        
+        # Define default whiskerpad area based on image dimensions and face orientation
+        img_height, img_width = image.shape[:2]
+        
+        if fp.FaceAxis == 'vertical':
+            # For vertical face axis, whiskerpad is typically on the side
+            wp_width = img_width // 6  # Use 1/6 of image width
+            wp_height = img_height // 4  # Use 1/4 of image height
+            
+            if face_side == 'left':
+                # Left whiskerpad is on the left side of the image
+                wp_x = wp_width // 2
+            else:
+                # Right whiskerpad is on the right side of the image
+                wp_x = img_width - wp_width - (wp_width // 2)
+                
+            # Vertical center, slightly offset based on face orientation
+            if fp.FaceOrientation == 'up':
+                wp_y = img_height // 3  # Upper third
+            else:
+                wp_y = (2 * img_height) // 3  # Lower third
+                
+        else:  # horizontal face axis
+            # For horizontal face axis, whiskerpad is typically on top/bottom
+            wp_width = img_width // 4  # Use 1/4 of image width
+            wp_height = img_height // 6  # Use 1/6 of image height
+            
+            if face_side == 'left':
+                # Left whiskerpad position
+                wp_x = img_width // 3
+            else:
+                # Right whiskerpad position
+                wp_x = (2 * img_width) // 3
+                
+            if fp.FaceOrientation == 'left':
+                wp_y = wp_height // 2
+            else:
+                wp_y = img_height - wp_height - (wp_height // 2)
+        
+        # Define whiskerpad area [x, y, width, height]
+        wpArea = [wp_x - wp_width//2, wp_y - wp_height//2, wp_width, wp_height]
+        
+        # Ensure coordinates are within image bounds
+        wpArea[0] = max(0, min(wpArea[0], img_width - wpArea[2]))
+        wpArea[1] = max(0, min(wpArea[1], img_height - wpArea[3]))
+        
+        # Define whiskerpad location as center of area
+        wpLocation = np.array([wpArea[0] + wpArea[2] // 2, wpArea[1] + wpArea[3] // 2])
+        
+        # Define relative location
+        wpRelativeLocation = [wpLocation[0] / img_width, wpLocation[1] / img_height]
+        
+        # Create WhiskingParams object
+        whiskingParams = WhiskingParams(wpArea, wpLocation, wpRelativeLocation, fp_wp)
+        
+        return whiskingParams
+
+    # ...existing code...
 def get_side_image(video_file, splitUp, video_dir=None):
     """
     Get the left and right side images of the face
