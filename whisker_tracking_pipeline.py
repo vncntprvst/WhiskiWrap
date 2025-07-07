@@ -13,8 +13,17 @@ which steps to execute, making it suitable for both complete analysis workflows
 and iterative development/debugging.
 
 Usage:
+    # Single side tracking (no whiskerpad detection)
     python whisker_tracking_pipeline.py <input_video> [options]
+
+    # Bilateral tracking (with whiskerpad detection)
+    python whisker_tracking_pipeline.py <input_video> -s [options]
+    
+    # Example for bilateral tracking with specific steps
     python whisker_tracking_pipeline.py test_videos/test_bilateral_view.mp4 -b excerpt_video -s -p 40 -o ./test_videos/whisker_tracking --steps trace
+
+    # Example for single-side tracking
+    python whisker_tracking_pipeline.py test_videos/test_video.mp4 -b single_test -p 40
 
 Arguments:
     input_video         Path to the input video file (required)
@@ -22,6 +31,7 @@ Arguments:
 Core Options:
     -b, --base          Base name for output files (default: input filename stem)
     -s, --splitUp       Split video into left and right sides for bilateral tracking
+                        (enables whiskerpad detection; omit for single-side tracking)
     -p, --nproc         Number of parallel trace processes (default: 40)
     -o, --output_dir    Output directory (default: input_dir/whisker_tracking)
     
@@ -39,8 +49,11 @@ Examples:
     # Run complete pipeline with bilateral tracking
     python whisker_tracking_pipeline.py video.mp4 -b experiment_01 -s -p 40
     
-    # Run only tracing and combining steps
-    python whisker_tracking_pipeline.py video.mp4 --steps trace,combine
+    # Run complete pipeline with single-side tracking
+    python whisker_tracking_pipeline.py video.mp4 -b experiment_01 -p 40
+    
+    # Run only tracing and combining steps (bilateral)
+    python whisker_tracking_pipeline.py video.mp4 --steps trace,combine -s
     
     # Skip tracing (use existing files) and run analysis only
     python whisker_tracking_pipeline.py video.mp4 --skip-trace
@@ -49,10 +62,17 @@ Examples:
     python whisker_tracking_pipeline.py video.mp4 --steps label,plot -b custom_name
 
 Output Files:
-    - {base_name}_left.parquet     : Left side whisker traces
-    - {base_name}_right.parquet    : Right side whisker traces  
-    - {base_name}_combined.parquet : Combined bilateral data
-    - {base_name}_labeled.parquet  : Data with whisker IDs (after labeling)
+    Single-side tracking (-s flag absent):
+    - {base_name}.parquet                  : Single-side whisker traces
+    
+    Bilateral tracking (-s flag present):
+    - {base_name}_left.parquet             : Left side whisker traces
+    - {base_name}_right.parquet            : Right side whisker traces  
+    - {base_name}_combined.parquet         : Combined bilateral data
+    - whiskerpad_{base_name}.json          : Whiskerpad detection parameters
+    
+    Both modes:
+    - {base_name}_labeled.parquet          : Data with whisker IDs (after labeling)
     - whisker_tracking_{base_name}_log.txt : Detailed execution log
 
 Written by Vincent Prevosto
@@ -79,8 +99,8 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
     Trace and measure whiskers from video input.
     
     This function handles the core whisker tracking pipeline including:
-    - Loading or creating whiskerpad configuration parameters
-    - Setting up tracking parameters for bilateral (left/right) processing
+    - Loading or creating whiskerpad configuration parameters (for bilateral tracking)
+    - Setting up tracking parameters for bilateral (left/right) or single-side processing
     - Running parallel whisker tracing with specified process count
     - Generating output files in Parquet format for downstream analysis
     
@@ -95,11 +115,11 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
     Returns:
         tuple: (output_filenames, whiskerpad_file)
             - output_filenames (list): Paths to generated trace files
-            - whiskerpad_file (str): Path to whiskerpad configuration file
+            - whiskerpad_file (str): Path to whiskerpad configuration file (None for single-side)
             
     Raises:
-        Exception: If whiskerpad parameters are missing or invalid
-        ValueError: If side-specific image coordinates cannot be found
+        Exception: If whiskerpad parameters are missing or invalid (bilateral tracking only)
+        ValueError: If side-specific image coordinates cannot be found (bilateral tracking only)
     """
     # if output directory doesn't exist, create it
     if not os.path.exists(output_dir):
@@ -107,28 +127,39 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
 
     input_dir = os.path.dirname(input_file)
 
-    # Load whiskerpad json file
-    whiskerpad_file = os.path.join(input_dir, f'whiskerpad_{base_name}.json')
-    
-    if not os.path.exists(whiskerpad_file):
-        # If whiskerpad file does not exist, create it
-        log_file.write(f"Creating whiskerpad parameters file {whiskerpad_file}\n")
+    # Handle single-side tracking (no whiskerpad detection needed)
+    if not splitUp:
+        log_file.write("Single-side tracking mode - skipping whiskerpad detection\n")
         log_file.flush()
-        whiskerpad = wp.Params(input_file, splitUp, base_name)
-        # Get whiskerpad parameters
-        whiskerpadParams, splitUp = wp.WhiskerPad.get_whiskerpad_params(whiskerpad)
-        # Save whisking parameters to json file
-        wp.WhiskerPad.save_whiskerpad_params(whiskerpad, whiskerpadParams)
+        
+        # Define side types for single-side tracking
+        side_types = ['single']
+        whiskerpad_file = None
+        whiskerpad_params = None
+        
+    else:
+        # Load whiskerpad json file for bilateral tracking
+        whiskerpad_file = os.path.join(input_dir, f'whiskerpad_{base_name}.json')
+        
+        if not os.path.exists(whiskerpad_file):
+            # If whiskerpad file does not exist, create it
+            log_file.write(f"Creating whiskerpad parameters file {whiskerpad_file}\n")
+            log_file.flush()
+            whiskerpad = wp.Params(input_file, splitUp, base_name)
+            # Get whiskerpad parameters
+            whiskerpadParams, splitUp = wp.WhiskerPad.get_whiskerpad_params(whiskerpad)
+            # Save whisking parameters to json file
+            wp.WhiskerPad.save_whiskerpad_params(whiskerpad, whiskerpadParams)
 
-    with open(whiskerpad_file, 'r') as f:
-        whiskerpad_params = json.load(f)
+        with open(whiskerpad_file, 'r') as f:
+            whiskerpad_params = json.load(f)
 
-    # Check that left and right whiskerpad parameters are defined
-    if np.size(whiskerpad_params['whiskerpads']) < 2:
-        raise Exception('Missing whiskerpad parameters in whiskerpad json file.')
+        # Check that left and right whiskerpad parameters are defined
+        if np.size(whiskerpad_params['whiskerpads']) < 2:
+            raise Exception('Missing whiskerpad parameters in whiskerpad json file.')
 
-    # Get side types (left / right or top / bottom)
-    side_types = [whiskerpad['FaceSide'].lower() for whiskerpad in whiskerpad_params['whiskerpads']]
+        # Get side types (left / right or top / bottom)
+        side_types = [whiskerpad['FaceSide'].lower() for whiskerpad in whiskerpad_params['whiskerpads']]
 
     ########################
     ### Run whisker tracking
@@ -156,19 +187,32 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
         log_file.flush()
         start_time_track = time.time()
 
-        output_filename = os.path.join(os.path.dirname(input_file), f'{base_name}_{side}.parquet')
-        chunk_name_pattern = f'{base_name}_{side}_%08d.tif'
-        # im_side is the side of the video frame where the face is located. 
-        # It is passed to the `face` argument below to tell `measure` which side of traced objects should be considered the follicle.
-        im_side = next((whiskerpad['ImageBorderAxis'] for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == side), None)
+        if splitUp:
+            # Bilateral tracking - use side-specific parameters
+            output_filename = os.path.join(os.path.dirname(input_file), f'{base_name}_{side}.parquet')
+            chunk_name_pattern = f'{base_name}_{side}_%08d.tif'
+            
+            # im_side is the side of the video frame where the face is located. 
+            # It is passed to the `face` argument below to tell `measure` which side of traced objects should be considered the follicle.
+            im_side = next((whiskerpad['ImageBorderAxis'] for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == side), None)
 
-        if im_side is None:
-            raise ValueError(f'Could not find {side} whiskerpad ImageBorderAxis in whiskerpad_params')
+            if im_side is None:
+                raise ValueError(f'Could not find {side} whiskerpad ImageBorderAxis in whiskerpad_params')
 
-        # Get the image coordinates
-        side_im_coord = next((whiskerpad['ImageCoordinates'] for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == side), None)
-        # reorder side_im_coord to fit -vf crop format width:height:x:y
-        side_im_coord = [side_im_coord[2], side_im_coord[3], side_im_coord[0], side_im_coord[1]]
+            # Get the image coordinates
+            side_im_coord = next((whiskerpad['ImageCoordinates'] for whiskerpad in whiskerpad_params['whiskerpads'] if whiskerpad['FaceSide'].lower() == side), None)
+            # reorder side_im_coord to fit -vf crop format width:height:x:y
+            side_im_coord = [side_im_coord[2], side_im_coord[3], side_im_coord[0], side_im_coord[1]]
+            
+            # Create FFmpeg reader with cropping
+            reader = ww.FFmpegReader(input_file, crop=side_im_coord)
+        else:
+            # Single-side tracking - use full video frame
+            output_filename = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+            chunk_name_pattern = f'{base_name}_%08d.tif'
+            
+            # Create FFmpeg reader without cropping
+            reader = ww.FFmpegReader(input_file)
 
         log_file.write(f'Number of trace processes: {nproc}\n')
         log_file.write(f'Output directory: {output_dir}\n')
@@ -177,20 +221,37 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
         log_file.write(f'Chunk name pattern: {chunk_name_pattern}\n')
         log_file.flush()
 
-        result_dict = ww.interleaved_split_trace_and_measure(
-            ww.FFmpegReader(input_file, crop=side_im_coord),
-            output_dir,
-            chunk_name_pattern=chunk_name_pattern,
-            chunk_size=chunk_size,
-            output_filename=output_filename,
-            n_trace_processes=nproc,
-            frame_func='crop',
-            face=im_side,
-            classify=classify_args,
-            summary_only=True,
-            skip_existing=True,
-            convert_chunks=True,
-        )
+        if splitUp:
+            # Bilateral tracking - use interleaved_split_trace_and_measure
+            result_dict = ww.interleaved_split_trace_and_measure(
+                reader,
+                output_dir,
+                chunk_name_pattern=chunk_name_pattern,
+                chunk_size=chunk_size,
+                output_filename=output_filename,
+                n_trace_processes=nproc,
+                frame_func='crop',
+                face=im_side,
+                classify=classify_args,
+                summary_only=True,
+                skip_existing=True,
+                convert_chunks=True,
+            )
+        else:
+            # Single-side tracking - use interleaved_trace_and_measure
+            result_dict = ww.interleaved_trace_and_measure(
+                reader,
+                output_dir,
+                chunk_name_pattern=chunk_name_pattern,
+                chunk_size=chunk_size,
+                output_filename=output_filename,
+                n_trace_processes=nproc,
+                frame_func='crop',
+                classify=classify_args,
+                summary_only=True,
+                skip_existing=True,
+                convert_chunks=True,
+            )
 
         time_track = time.time() - start_time_track
         log_file.write(f'Tracking for {side} took {time_track} seconds.\n')
@@ -287,7 +348,18 @@ For more information, see the documentation in the script header.
 
     # Set up paths and parameters
     output_dir = args.output_dir if args.output_dir else os.path.join(os.path.dirname(input_file), 'whisker_tracking')
-    base_name = args.base if args.base else os.path.basename(input_file).split('.')[0]
+    
+    # Extract base name more robustly
+    if args.base:
+        base_name = args.base
+    else:
+        # Get filename without path and extension
+        filename = os.path.basename(input_file)
+        if '.' in filename:
+            base_name = filename.rsplit('.', 1)[0]  # Remove last extension
+        else:
+            base_name = filename
+    
     splitUp = args.splitUp
     nproc = max(1, args.nproc)  # Ensure at least 1 process
     
@@ -333,10 +405,15 @@ For more information, see the documentation in the script header.
     # Validate dependencies
     if 'combine' in steps_to_run and 'trace' not in steps_to_run:
         # Check if trace files exist
-        expected_trace_files = [
-            os.path.join(os.path.dirname(input_file), f'{base_name}_left.parquet'),
-            os.path.join(os.path.dirname(input_file), f'{base_name}_right.parquet')
-        ]
+        if splitUp:
+            expected_trace_files = [
+                os.path.join(os.path.dirname(input_file), f'{base_name}_left.parquet'),
+                os.path.join(os.path.dirname(input_file), f'{base_name}_right.parquet')
+            ]
+        else:
+            expected_trace_files = [
+                os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+            ]
         missing_files = [f for f in expected_trace_files if not os.path.exists(f)]
         if missing_files:
             print(f"Warning: Combine step requested but trace files missing: {missing_files}")
@@ -344,9 +421,12 @@ For more information, see the documentation in the script header.
     
     if any(step in steps_to_run for step in ['label', 'reclassify', 'plot']) and 'combine' not in steps_to_run:
         # Check if combined file exists
-        expected_combined_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
+        if splitUp:
+            expected_combined_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
+        else:
+            expected_combined_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
         if not os.path.exists(expected_combined_file):
-            print(f"Warning: Analysis steps requested but combined file missing: {expected_combined_file}")
+            print(f"Warning: Analysis steps requested but file missing: {expected_combined_file}")
             print("Consider running combine step first or using appropriate skip flags")
 
     # Set up logging with error handling
@@ -391,17 +471,24 @@ For more information, see the documentation in the script header.
                 else:
                     log_file.write("=== STEP 1: Skipping whisker tracing ===\n")
                     # Look for existing trace files
-                    output_filenames = [
-                        os.path.join(os.path.dirname(input_file), f'{base_name}_left.parquet'),
-                        os.path.join(os.path.dirname(input_file), f'{base_name}_right.parquet')
-                    ]
-                    whiskerpad_file = os.path.join(os.path.dirname(input_file), f'whiskerpad_{base_name}.json')
+                    if splitUp:
+                        output_filenames = [
+                            os.path.join(os.path.dirname(input_file), f'{base_name}_left.parquet'),
+                            os.path.join(os.path.dirname(input_file), f'{base_name}_right.parquet')
+                        ]
+                        whiskerpad_file = os.path.join(os.path.dirname(input_file), f'whiskerpad_{base_name}.json')
+                    else:
+                        output_filenames = [
+                            os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+                        ]
+                        whiskerpad_file = None
                     log_file.write(f"Using existing trace files: {output_filenames}\n")
                     log_file.flush()
 
                 # Step 2: Combine left and right whisker data
                 if 'combine' in steps_to_run:
-                    if output_filenames and whiskerpad_file:
+                    if splitUp and output_filenames and whiskerpad_file:
+                        # Bilateral tracking - combine left and right data
                         log_file.write("=== STEP 2: Combining whisker tracking files ===\n")
                         log_file.flush()
                         step_start_time = time.time()
@@ -412,17 +499,27 @@ For more information, see the documentation in the script header.
                         log_file.write(f'Combining whiskers took {step_time:.2f} seconds.\n')
                         log_file.flush()
                         gc.collect()
+                    elif not splitUp and output_filenames:
+                        # Single-side tracking - use the single output file directly
+                        log_file.write("=== STEP 2: Single-side tracking - using single output file ===\n")
+                        output_file = output_filenames[0]  # Use the single parquet file
+                        log_file.write(f'Using single-side file: {output_file}\n')
+                        log_file.flush()
                     else:
                         log_file.write("=== STEP 2: Cannot combine - missing trace files or whiskerpad file ===\n")
                         log_file.flush()
                 else:
                     log_file.write("=== STEP 2: Skipping combining whisker data ===\n")
                     # Look for existing combined file
-                    output_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
-                    if os.path.exists(output_file):
-                        log_file.write(f"Using existing combined file: {output_file}\n")
+                    if splitUp:
+                        output_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
                     else:
-                        log_file.write(f"Warning: Expected combined file not found: {output_file}\n")
+                        output_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+                    
+                    if os.path.exists(output_file):
+                        log_file.write(f"Using existing file: {output_file}\n")
+                    else:
+                        log_file.write(f"Warning: Expected file not found: {output_file}\n")
                     log_file.flush()
 
                 # Step 3: Automatic whisker labelling using U-Net
@@ -435,7 +532,12 @@ For more information, see the documentation in the script header.
                         unet_output_file = uc.assign_whisker_ids(input_file, output_file)
                         if unet_output_file is not None:
                             output_file = unet_output_file
-                            base_name = os.path.basename(output_file).split('.')[0]
+                            # Extract base name from output file more robustly
+                            output_filename = os.path.basename(output_file)
+                            if '.' in output_filename:
+                                base_name = output_filename.rsplit('.', 1)[0]
+                            else:
+                                base_name = output_filename
                             step_time = time.time() - step_start_time
                             log_file.write(f'Automatic labelling took {step_time:.2f} seconds.\n')
                         else:
@@ -444,7 +546,7 @@ For more information, see the documentation in the script header.
                         log_file.flush()
                         gc.collect()
                     else:
-                        log_file.write("=== STEP 3: Cannot label - missing combined file ===\n")
+                        log_file.write("=== STEP 3: Cannot label - missing tracking file ===\n")
                         log_file.flush()
                 else:
                     log_file.write("=== STEP 3: Skipping automatic whisker labeling ===\n")
@@ -452,15 +554,26 @@ For more information, see the documentation in the script header.
 
                 # Step 4: Reclassification fallback
                 if 'reclassify' in steps_to_run:
-                    if output_file and whiskerpad_file and os.path.exists(output_file):
+                    if output_file and os.path.exists(output_file):
                         log_file.write("=== STEP 4: Reclassifying whiskers ===\n")
                         log_file.flush()
                         step_start_time = time.time()
                         
-                        updated_output_file = rc.reclassify(output_file, whiskerpad_file)
+                        # Only use whiskerpad_file if it exists (bilateral tracking)
+                        if whiskerpad_file and os.path.exists(whiskerpad_file):
+                            updated_output_file = rc.reclassify(output_file, whiskerpad_file)
+                        else:
+                            # For single-side tracking, pass None for whiskerpad_file
+                            updated_output_file = rc.reclassify(output_file, None)
+                            
                         if updated_output_file is not None:
                             output_file = updated_output_file
-                            base_name = os.path.basename(output_file).split('.')[0]
+                            # Extract base name from output file more robustly
+                            output_filename = os.path.basename(output_file)
+                            if '.' in output_filename:
+                                base_name = output_filename.rsplit('.', 1)[0]
+                            else:
+                                base_name = output_filename
                             step_time = time.time() - step_start_time
                             log_file.write(f'Reclassifying whiskers took {step_time:.2f} seconds.\n')
                         else:
@@ -469,7 +582,7 @@ For more information, see the documentation in the script header.
                         log_file.flush()
                         gc.collect()
                     else:
-                        log_file.write("=== STEP 4: Cannot reclassify - missing files ===\n")
+                        log_file.write("=== STEP 4: Cannot reclassify - missing output file ===\n")
                         log_file.flush()
                 else:
                     log_file.write("=== STEP 4: Skipping reclassification ===\n")

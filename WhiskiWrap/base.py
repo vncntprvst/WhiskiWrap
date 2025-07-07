@@ -1402,8 +1402,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     ffw = None
 
     # Setup the result file
-    if not skip_stitch:
-        setup_hdf5(h5_filename, expectedrows, measure=True)
+    setup_hdf5(h5_filename, expectedrows, measure=True)
 
     # Copy the parameters files
     copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
@@ -1461,7 +1460,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         tif_filename = ctw.chunknames_written[-1]
 
         ## Start trace
-        trace_pool.apply_async(trace_and_measure_chunk, args=(tif_filename, delete_tiffs, face),
+        trace_pool.apply_async(trace_chunk, args=(tif_filename, delete_tiffs),
             callback=log_result)
 
         ## Determine whether we can delete any tiffs
@@ -1512,21 +1511,11 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     ## Extract the chunk numbers from the filenames
     # The tiffs have been written, figure out which they are
     split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
-    # tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
-    #     '^chunk(\d+).tif$', split_traced_filenames, sort=False)
-    
-    # Replace the format specifier with (\d+) in the pattern
-    mod_chunk_name_pattern = re.sub(r'%\d+d', r'(\\d+)', chunk_name_pattern)
-    mod_chunk_name_pattern = '^' + mod_chunk_name_pattern + '$'
     tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
-        mod_chunk_name_pattern, split_traced_filenames, sort=False)
-
-    # Replace the format specifier with %s in the pattern
-    tif_chunk_name_pattern = re.sub(r'%\d+d', r'%s', chunk_name_pattern)
+        '^chunk(\d+).tif$', split_traced_filenames, sort=False)
     tif_full_filenames = [
-        os.path.join(tiffs_to_trace_directory, tif_chunk_name_pattern % fns)
+        os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
         for fns in tif_file_number_strings]
-    
     tif_file_numbers = list(map(int, tif_file_number_strings))
     tif_ordering = np.argsort(tif_file_numbers)
     tif_sorted_filenames = np.array(tif_full_filenames)[
@@ -1543,7 +1532,6 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
             fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
             append_whiskers_to_hdf5(
                 whisk_filename=fn.whiskers,
-		        measurements_filename = fn.measurements,
                 h5_filename=h5_filename,
                 chunk_start=chunk_start)
 
@@ -1663,7 +1651,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         pattern = chunk_name_pattern.replace('.tif', r'(.whiskers|.measurements)').replace('%08d', r'\d{8}')
         existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if re.match(pattern, f)]
         # Any whiskers or measurements files (less precise than the pattern):
-        # existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endswith('.measurements')]
+        # existing_files = [f for f in os.listdir(tiffs_to_trace_directory) if f.endswith('.whiskers') or f.endsWith('.measurements')]
 
         if len(existing_files) > 0:    
             print("Existing files found, skipping to stitching")
@@ -1792,7 +1780,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
         ## Wait for trace to complete
         if verbose:
-            print("Done with reading and writing, just waiting for tracing")
+            print("done with reading and writing, just waiting for tracing")
         # Tell it no more jobs, so close when done
         trace_pool.close()
 
@@ -1920,254 +1908,6 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         'monitor_ff_stderr': ff_stderr,
         'tif_sorted_file_numbers': sorted_file_numbers,
         'tif_sorted_filenames': sorted_filenames,
-        }
-
-def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
-    sensitive=False,
-    chunk_size=200, chunk_name_pattern='chunk%08d.tif',
-    stop_after_frame=None, delete_tiffs=True,
-    timestamps_filename=None, monitor_video=None,
-    monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
-    h5_filename=None, parquet_filename=None, frame_func=None,
-    n_trace_processes=4, expectedrows=1000000,
-    verbose=True, skip_stitch=False,
-    ):
-    """Read, write, and trace each chunk, one at a time.
-
-    This is an alternative to first calling:
-        write_video_as_chunked_tiffs
-    And then calling
-        trace_chunked_tiffs
-
-    input_reader : Typically a PFReader or FFmpegReader
-    tiffs_to_trace_directory : Location to write the tiffs
-    sensitive: if False, use default. If True, lower MIN_SIGNAL
-    chunk_size : frames per chunk
-    chunk_name_pattern : how to name them
-    stop_after_frame : break early, for debugging
-    delete_tiffs : whether to delete tiffs after done tracing
-    timestamps_filename : Where to store the timestamps
-        Only vallid for PFReader input_reader
-    monitor_video : filename for a monitor video
-        If None, no monitor video will be written
-    monitor_video_kwargs : kwargs to pass to FFmpegWriter for monitor
-    write_monitor_ffmpeg_stderr_to_screen : whether to display
-        output from ffmpeg writing instance
-    h5_filename : hdf5 file to stitch whiskers information into
-    frame_func : function to apply to each frame
-        If 'invert', will apply 255 - frame
-    n_trace_processes : number of simultaneous trace processes
-    expectedrows : how to set up hdf5 file
-    verbose : verbose
-    skip_stitch : skip the stitching phase
-
-    Returns: dict
-        trace_pool_results : result of each call to trace
-        monitor_ff_stderr, monitor_ff_stdout : results from monitor
-            video ffmpeg instance
-    """
-    ## Set up kwargs
-    if monitor_video_kwargs is None:
-        monitor_video_kwargs = {}
-
-    if frame_func == 'invert':
-        frame_func = lambda frame: 255 - frame
-
-    # Check commands
-    WhiskiWrap.utils.probe_needed_commands()
-
-    ## Initialize readers and writers
-    if verbose:
-        print("initalizing readers and writers")
-    # Tiff writer
-    ctw = WhiskiWrap.ChunkedTiffWriter(tiffs_to_trace_directory,
-        chunk_size=chunk_size, chunk_name_pattern=chunk_name_pattern)
-
-    # FFmpeg writer is initalized after first frame
-    ffw = None
-
-    # Setup the result file
-    if not skip_stitch:
-        # Determine output format based on provided filenames
-        output_filename = None
-        if h5_filename is not None:
-            output_filename = h5_filename
-            setup_hdf5(h5_filename, expectedrows)
-        elif parquet_filename is not None:
-            output_filename = parquet_filename
-            # Create temporary directory for parquet chunks
-            temp_dir = tempfile.mkdtemp()
-        else:
-            raise ValueError("Either h5_filename or parquet_filename must be provided")
-
-    # Copy the parameters files
-    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
-
-    ## Set up the worker pool
-    # Pool of trace workers
-    trace_pool = mp.Pool(n_trace_processes)
-
-    # Keep track of results
-    trace_pool_results = []
-    deleted_tiffs = []
-    def log_result(result):
-        trace_pool_results.append(result)
-
-    ## Iterate over chunks
-    out_of_frames = False
-    nframe = 0
-
-    # Init the iterator outside of the loop so that it persists
-    iter_obj = input_reader.iter_frames()
-
-    while not out_of_frames:
-        # Get a chunk of frames
-        if verbose:
-            print("loading chunk of frames starting with", nframe)
-        chunk_of_frames = []
-        for frame in iter_obj:
-            if frame_func is not None:
-                frame = frame_func(frame)
-            chunk_of_frames.append(frame)
-            nframe = nframe + 1
-            if stop_after_frame is not None and nframe >= stop_after_frame:
-                break
-            if len(chunk_of_frames) == chunk_size:
-                break
-
-        # Check if we ran out
-        if len(chunk_of_frames) != chunk_size:
-            out_of_frames = True
-
-        ## Write tiffs
-        # We do this synchronously to ensure that it happens before
-        # the trace starts
-        for frame in chunk_of_frames:
-            ctw.write(frame)
-
-        # Make sure the chunk was written, in case this is the last one
-        # and we didn't reach chunk_size yet
-        if len(chunk_of_frames) != chunk_size:
-            ctw._write_chunk()
-        assert ctw.count_unwritten_frames() == 0
-
-        # Figure out which tiff file was just generated
-        tif_filename = ctw.chunknames_written[-1]
-
-        ## Start trace
-        trace_pool.apply_async(trace_chunk, args=(tif_filename, delete_tiffs),
-            callback=log_result)
-
-        ## Determine whether we can delete any tiffs
-        #~ if delete_tiffs:
-            #~ tiffs_to_delete = [
-                #~ tpres['video_filename'] for tpres in trace_pool_results
-                #~ if tpres['video_filename'] not in deleted_tiffs]
-            #~ for filename in tiffs_to_delete:
-                #~ if verbose:
-                    #~ print "deleting", filename
-                #~ os.remove(filename)
-
-        ## Start monitor encode
-        # This is also synchronous, otherwise the input buffer might fill up
-        if monitor_video is not None:
-            if ffw is None:
-                ffw = WhiskiWrap.FFmpegWriter(monitor_video,
-                    frame_width=frame.shape[1], frame_height=frame.shape[0],
-                    write_stderr_to_screen=write_monitor_ffmpeg_stderr_to_screen,
-                    **monitor_video_kwargs)
-            for frame in chunk_of_frames:
-                ffw.write(frame)
-
-        ## Determine if we should pause
-        while len(ctw.chunknames_written) > len(trace_pool_results) + 2 * n_trace_processes:
-            print("waiting for tracing to catch up")
-            time.sleep(10)
-
-    ## Wait for trace to complete
-    if verbose:
-        print("done with reading and writing, just waiting for tracing")
-    # Tell it no more jobs, so close when done
-    trace_pool.close()
-
-    # Wait for everything to finish
-    trace_pool.join()
-
-    ## Error check the tifs that were processed
-    # Get the tifs we wrote, and the tifs we trace
-    written_chunks = sorted(ctw.chunknames_written)
-    traced_filenames = sorted([
-        res['video_filename'] for res in trace_pool_results])
-
-    # Check that they are the same
-    if not np.all(np.array(written_chunks) == np.array(traced_filenames)):
-        raise ValueError("not all chunks were traced")
-
-    ## Extract the chunk numbers from the filenames
-    # The tiffs have been written, figure out which they are
-    split_traced_filenames = [os.path.split(fn)[1] for fn in traced_filenames]
-    tif_file_number_strings = wwutils.misc.apply_and_filter_by_regex(
-        '^chunk(\d+).tif$', split_traced_filenames, sort=False)
-    tif_full_filenames = [
-        os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
-        for fns in tif_file_number_strings]
-    tif_file_numbers = list(map(int, tif_file_number_strings))
-    tif_ordering = np.argsort(tif_file_numbers)
-    tif_sorted_filenames = np.array(tif_full_filenames)[
-        tif_ordering]
-    tif_sorted_file_numbers = np.array(tif_file_numbers)[
-        tif_ordering]
-
-    # stitch
-    if not skip_stitch:
-        print("Stitching")
-        zobj = list(zip(tif_sorted_file_numbers, tif_sorted_filenames))
-        
-        if h5_filename is not None:
-            # HDF5 stitching
-            for chunk_start, chunk_name in zobj:
-                # Append each chunk to the hdf5 file
-                fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
-                append_whiskers_to_hdf5(
-                    whisk_filename=fn.whiskers,
-                    h5_filename=h5_filename,
-                    chunk_start=chunk_start)
-        elif parquet_filename is not None:
-            # Parquet stitching
-            for chunk_start, chunk_name in zobj:
-                # Process each chunk to parquet format
-                fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
-                process_and_write_parquet(
-                    whiskers_filename=fn.whiskers,
-                    chunk_start=chunk_start,
-                    face_side='NA',
-                    temp_dir=temp_dir)
-            
-            # Merge all parquet files
-            merge_parquet_files(temp_dir, parquet_filename)
-            
-            # Clean up temporary directory
-            import shutil
-            shutil.rmtree(temp_dir)
-
-    # Finalize writers
-    ctw.close()
-    if ffw is not None:
-        ff_stdout, ff_stderr = ffw.close()
-    else:
-        ff_stdout, ff_stderr = None, None
-
-    # Also write timestamps as numpy file
-    if hasattr(input_reader, 'timestamps') and timestamps_filename is not None:
-        timestamps = np.concatenate(input_reader.timestamps)
-        assert len(timestamps) >= ctw.frames_written
-        np.save(timestamps_filename, timestamps[:ctw.frames_written])
-
-    return {'trace_pool_results': trace_pool_results,
-        'monitor_ff_stdout': ff_stdout,
-        'monitor_ff_stderr': ff_stderr,
-        'tif_sorted_file_numbers': tif_sorted_file_numbers,
-        'tif_sorted_filenames': tif_sorted_filenames,
         }
 
 def compress_pf_to_video(input_reader, chunk_size=200, stop_after_frame=None,
@@ -2762,3 +2502,160 @@ class FFmpegWriter:
         """Closes the ffmpeg process and returns stdout, stderr"""
         return self.ffmpeg_proc.communicate()
 
+
+def interleaved_trace_and_measure(input_reader, tiffs_to_trace_directory,
+    sensitive=False,
+    chunk_size=200, chunk_name_pattern='chunk%08d.tif',
+    stop_after_frame=None, delete_tiffs=True,
+    timestamps_filename=None, monitor_video=None,
+    monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
+    output_filename=None, frame_func=None,
+    n_trace_processes=4, expectedrows=1000000,
+    verbose=True, skip_stitch=False, classify=None,
+    summary_only=False, skip_existing=False, convert_chunks=False
+    ):
+    """Read, write, trace and measure each chunk, one at a time.
+
+    This function is designed for single-side whisker tracking where the full video
+    frame is processed without splitting. It combines tracing and measurement in
+    a single pipeline with Parquet output support.
+
+    input_reader : Typically a PFReader or FFmpegReader
+    tiffs_to_trace_directory : Location to write the tiffs
+    sensitive: if False, use default. If True, lower MIN_SIGNAL
+    chunk_size : frames per chunk
+    chunk_name_pattern : how to name them
+    stop_after_frame : break early, for debugging
+    delete_tiffs : whether to delete tiffs after done tracing
+    timestamps_filename : Where to store the timestamps
+        Only valid for PFReader input_reader
+    monitor_video : filename for a monitor video
+        If None, no monitor video will be written
+    monitor_video_kwargs : kwargs to pass to FFmpegWriter for monitor
+    write_monitor_ffmpeg_stderr_to_screen : whether to display
+        output from ffmpeg writing instance
+    output_filename : Parquet file to write whisker data to
+    frame_func : function to apply to each frame
+        If 'invert', will apply 255 - frame
+    n_trace_processes : number of simultaneous trace processes
+    expectedrows : expected number of whisker segments (for optimization)
+    verbose : whether to print progress information
+    skip_stitch : if True, don't stitch results together
+    classify : dictionary of classify arguments for whisker classification
+    summary_only : if True, only save summary data (not pixel coordinates)
+    skip_existing : if True, skip processing if output file already exists
+    convert_chunks : if True, convert individual chunks to desired format
+    """
+    if skip_existing and output_filename and os.path.exists(output_filename):
+        if verbose:
+            print(f"Output file {output_filename} already exists, skipping...")
+        return {'output_filename': output_filename}
+
+    # Set up parameters file copying
+    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
+    
+    # Initialize output tracking
+    result_dict = {}
+    
+    # Create temporary directory for chunk processing
+    temp_dir = os.path.join(tiffs_to_trace_directory, 'temp_chunks')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    try:
+        # Write video as chunked tiffs and process them
+        ctw = write_video_as_chunked_tiffs(
+            input_reader, 
+            tiffs_to_trace_directory,
+            chunk_size=chunk_size, 
+            chunk_name_pattern=chunk_name_pattern,
+            stop_after_frame=stop_after_frame, 
+            monitor_video=monitor_video,
+            timestamps_filename=timestamps_filename,
+            monitor_video_kwargs=monitor_video_kwargs
+        )
+        
+        # Get list of tiff files to process
+        tif_filenames = ctw.chunknames_written
+        
+        if verbose:
+            print(f"Processing {len(tif_filenames)} chunks with {n_trace_processes} processes")
+        
+        # Process chunks in parallel
+        pool = mp.Pool(n_trace_processes)
+        
+        # Keep track of results
+        trace_results = []
+        def log_result(result):
+            print("Result logged:", result)
+            trace_results.append(result)
+        
+        # Process all chunks
+        if verbose:
+            print("Tracing and measuring chunks...")
+            
+        # Start async jobs for each chunk
+        convert_chunks_to = 'parquet' if convert_chunks else None
+        for tif_filename in tif_filenames:
+            pool.apply_async(trace_and_measure_chunk, 
+                           args=(tif_filename, delete_tiffs, 'right', classify, 
+                                temp_dir if convert_chunks else None, convert_chunks_to),
+                           callback=log_result)
+        
+        # Wait for all jobs to complete
+        pool.close()
+        pool.join()
+        
+        if not skip_stitch and output_filename:
+            if verbose:
+                print("Stitching results together...")
+            
+            if convert_chunks:
+                # Merge parquet files from temp directory
+                merge_parquet_files(temp_dir, output_filename)
+            else:
+                # Convert and stitch HDF5 files to Parquet
+                stitch_h5_to_parquet(tif_filenames, output_filename, face_side='single')
+        
+        # Clean up temporary directory
+        if os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir)
+        
+        result_dict['output_filename'] = output_filename
+        result_dict['trace_results'] = trace_results
+        result_dict['n_chunks'] = len(tif_filenames)
+        
+        if verbose:
+            print(f"Completed processing. Output saved to {output_filename}")
+        
+        return result_dict
+        
+    except Exception as e:
+        # Clean up on error
+        if os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir)
+        raise e
+
+def stitch_h5_to_parquet(tif_filenames, output_filename, face_side='single'):
+    """
+    Stitch together HDF5 files from individual chunks into a single Parquet file.
+    
+    This is a helper function for interleaved_trace_and_measure when convert_chunks=False.
+    """
+    all_data = []
+    
+    for chunk_idx, tif_filename in enumerate(tif_filenames):
+        h5_filename = tif_filename.replace('.tif', '.hdf5')
+        if os.path.exists(h5_filename):
+            chunk_start = chunk_idx * 200  # Default chunk size
+            append_whiskers_to_parquet(
+                whisk_filename=tif_filename.replace('.tif', '.whiskers'),
+                measurements_filename=tif_filename.replace('.tif', '.measurements'),
+                parquet_filename=output_filename,
+                chunk_start=chunk_start,
+                summary_only=False,
+                face_side=face_side
+            )
+            # Clean up individual HDF5 file
+            os.remove(h5_filename)
