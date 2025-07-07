@@ -30,6 +30,9 @@ dependencies = [
     "pyarrow",
     "matplotlib",
     "easygui",
+    "opencv-python",
+    "h5py",
+    "seaborn",
 ]
 requires-python = ">=3.10"
 

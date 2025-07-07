@@ -12,5 +12,8 @@ zarr
 pyarrow
 matplotlib
 easygui
+opencv-python  # Required for whiskerpad module
+h5py  # Required for combine_sides module
+seaborn  # Optional, for plotting
 
 # Usage: pip install -r requirements.txt

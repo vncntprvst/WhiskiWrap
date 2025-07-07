@@ -28,6 +28,9 @@ setup(
       'pyarrow',
       'matplotlib',
       'easygui',
+      'opencv-python',  # Required for whiskerpad module
+      'h5py',  # Required for combine_sides module
+      'seaborn',  # Optional, for plotting
       ],
    python_requires='>=3.10',
    include_package_data=True,
