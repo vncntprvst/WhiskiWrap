@@ -1,14 +1,12 @@
-
 from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.2.3',
-   author='Chris Rodgers',
+   version='1.2.4',
+   authors='Chris Rodgers, Ariel Iporre, Vincent Prevosto',
    author_email='',
    maintainer=', '.join(['cxrodgers','aiporre','vncntprvst']),
    packages=['WhiskiWrap','wwutils'],
-   # scripts=['bin/script1','bin/script2'],
    url='http://pypi.python.org/pypi/WhiskiWrap/',
    license='LICENSE.txt',
    description='Whisk package wrapper created by cxrodgers',

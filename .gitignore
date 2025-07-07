@@ -67,9 +67,11 @@ target/
 
 todo.md
 d
+
 # Whisker tracking output files 
 test_videos/whisker_tracking*/
 test_videos/plots/
 test_videos/whiskerpad*
 test_videos/*log*
 test_videos/*.parquet
+tests/*/

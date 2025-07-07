@@ -65,7 +65,7 @@ else:
     print('WHISKPATH detected: ', whisk_path)
 
 import WhiskiWrap
-from WhiskiWrap import video_utils
+from wwutils import video
 import wwutils
 
 # Find the repo directory and the default param files
@@ -177,7 +177,7 @@ def trace_chunk(video_filename, delete_when_done=False):
     print(("Starting", video_filename))
     orig_dir = os.getcwd()
     run_dir, raw_video_filename = os.path.split(os.path.abspath(video_filename))
-    whiskers_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).whiskers
+    whiskers_file = wwutils.utils.FileNamer.from_video(video_filename).whiskers
     command = [whisk_path + 'trace', raw_video_filename, whiskers_file]
 
     os.chdir(run_dir)
@@ -218,7 +218,7 @@ def measure_chunk(whiskers_filename, face, delete_when_done=False):
     print(("Starting", whiskers_filename))
     orig_dir = os.getcwd()
     run_dir, raw_whiskers_filename = os.path.split(os.path.abspath(whiskers_filename))
-    measurements_file = WhiskiWrap.utils.FileNamer.from_whiskers(whiskers_filename).measurements
+    measurements_file = wwutils.utils.FileNamer.from_whiskers(whiskers_filename).measurements
     command = ['measure', '--face', face, raw_whiskers_filename, measurements_file]
 
     os.chdir(run_dir)
@@ -262,7 +262,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
     run_dir, raw_video_filename = os.path.split(os.path.abspath(video_filename))
 
     # Run trace:
-    whiskers_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).whiskers
+    whiskers_file = wwutils.utils.FileNamer.from_video(video_filename).whiskers
     trace_command = [whisk_path + 'trace', raw_video_filename, whiskers_file]
 
     os.chdir(run_dir)
@@ -284,7 +284,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
         raise IOError("tracing seems to have failed")
 
     # Run measure:
-    measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
+    measurements_file = wwutils.utils.FileNamer.from_video(video_filename).measurements
     measure_command = [whisk_path + 'measure', '--face', face, whiskers_file, measurements_file]
 
     os.chdir(run_dir)
@@ -310,7 +310,7 @@ def trace_and_measure_chunk(video_filename, delete_when_done=False, face='right'
     # Reference page: https://wikis.janelia.org/display/WT/Whisker+Tracking+Command+Line+Reference#WhiskerTrackingCommandLineReference-classify
     # Re-classify reference page: https://wikis.janelia.org/display/WT/Whisker+Tracking+Command+Line+Reference#WhiskerTrackingCommandLineReference-reclassify
     if classify is not None:
-        measurements_file = WhiskiWrap.utils.FileNamer.from_video(video_filename).measurements
+        measurements_file = wwutils.utils.FileNamer.from_video(video_filename).measurements
         
         classify_command = [whisk_path + 'classify', measurements_file, measurements_file, face, '--px2mm', classify['px2mm'], '-n', classify['n_whiskers']]
         if 'limit' in classify and classify['limit'] is not None:
@@ -1149,7 +1149,7 @@ def pipeline_trace(input_vfile, h5_filename,
     we don't have to load the whole epoch in at once. In fact then we don't
     even need epochs at all.
     """
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
 
     # Figure out where to store temporary data
     input_vfile = os.path.abspath(input_vfile)
@@ -1159,8 +1159,8 @@ def pipeline_trace(input_vfile, h5_filename,
     setup_hdf5(h5_filename, expectedrows, measure=measure)
 
     # Figure out how many frames and epochs
-    duration = wwutils.video.get_video_duration(input_vfile)
-    frame_rate = wwutils.video.get_video_params(input_vfile)[2]
+    duration = video.get_video_duration(input_vfile)
+    frame_rate = video.get_video_params(input_vfile)[2]
     total_frames = int(np.rint(duration * frame_rate))
     if frame_stop is None:
         frame_stop = total_frames
@@ -1182,7 +1182,7 @@ def pipeline_trace(input_vfile, h5_filename,
         # read everything
         # need to be able to crop here
         print("Reading")
-        frames = video_utils.process_chunks_of_video(input_vfile,
+        frames = video.process_chunks_of_video(input_vfile,
             frame_start=start_epoch, frame_stop=stop_epoch,
             frames_per_chunk=chunk_sz_frames, # only necessary for chunk_func
             frame_func=None, chunk_func=None,
@@ -1223,7 +1223,7 @@ def pipeline_trace(input_vfile, h5_filename,
         print("Stitching")
         for chunk_start, chunk_name in zip(chunk_starts, chunk_names):
             # Append each chunk to the hdf5 file
-            fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(
+            fn = wwutils.utils.FileNamer.from_tiff_stack(
                 os.path.join(input_dir, chunk_name))
 
             if not measure:
@@ -1303,7 +1303,7 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
     n_trace_processes : how many simultaneous processes to use for tracing
     expectedrows : used to set up hdf5 file
     """
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
 
     # Setup the result file
     setup_hdf5(h5_filename, expectedrows)
@@ -1331,7 +1331,7 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
     print("Stitching")
     for chunk_start, chunk_name in zip(tif_sorted_file_numbers, tif_sorted_filenames):
         # Append each chunk to the hdf5 file
-        fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+        fn = wwutils.utils.FileNamer.from_tiff_stack(chunk_name)
         append_whiskers_to_hdf5(
             whisk_filename=fn.whiskers,
             h5_filename=h5_filename,
@@ -1389,7 +1389,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         frame_func = lambda frame: 255 - frame
 
     # Check commands
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
 
     ## Initialize readers and writers
     if verbose:
@@ -1529,7 +1529,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         zobj = list(zip(tif_sorted_file_numbers, tif_sorted_filenames))
         for chunk_start, chunk_name in zobj:
             # Append each chunk to the hdf5 file
-            fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+            fn = wwutils.utils.FileNamer.from_tiff_stack(chunk_name)
             append_whiskers_to_hdf5(
                 whisk_filename=fn.whiskers,
                 h5_filename=h5_filename,
@@ -1620,7 +1620,7 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         input_reader.crop = None
 
     # Check commands
-    WhiskiWrap.utils.probe_needed_commands(paths=[whisk_path])
+    wwutils.utils.probe_needed_commands(paths=[whisk_path])
 
     ## Initialize readers and writers
     if verbose:
@@ -1832,9 +1832,9 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             for chunk_start, chunk_name in zobj:
                 # Append each chunk to the hdf5 file
                 if chunk_name.endswith('.tif'):
-                    fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+                    fn = wwutils.utils.FileNamer.from_tiff_stack(chunk_name)
                 elif chunk_name.endswith('.whiskers'):
-                    fn = WhiskiWrap.utils.FileNamer.from_whiskers(chunk_name)
+                    fn = wwutils.utils.FileNamer.from_whiskers(chunk_name)
                 append_whiskers_to_hdf5(
                     whisk_filename=fn.whiskers,
                     measurements_filename = fn.measurements,
@@ -2309,7 +2309,7 @@ class FFmpegReader:
         bufsize : probably not necessary because we read one frame at a time
         duration : duration of video to read (-t parameter)
         start_frame_time, start_frame_number : -ss parameter
-            Parsed using wwutils.video.ffmpeg_frame_string
+            Parsed using video.ffmpeg_frame_string
         crop : crop the video using the ffmpeg crop filter. Format is width:height:x:y
         write_stderr_to_screen : if True, writes to screen, otherwise to
             /dev/null
@@ -2318,7 +2318,7 @@ class FFmpegReader:
 
         # Get params
         self.frame_width, self.frame_height, self.frame_rate = \
-            wwutils.video.get_video_params(input_filename, crop=crop)
+            video.get_video_params(input_filename, crop=crop)
 
         # Set up pix_fmt
         if pix_fmt == 'gray':
@@ -2335,7 +2335,7 @@ class FFmpegReader:
 
         # Add ss string
         if start_frame_time is not None or start_frame_number is not None:
-            ss_string = wwutils.video.ffmpeg_frame_string(input_filename,
+            ss_string = video.ffmpeg_frame_string(input_filename,
                 frame_time=start_frame_time, frame_number=start_frame_number)
             command += [
                 '-ss', ss_string]

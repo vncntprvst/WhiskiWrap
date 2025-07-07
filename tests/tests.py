@@ -15,6 +15,7 @@ import tables
 import time
 import pandas
 import WhiskiWrap
+import wwutils
 import shutil
 
 
@@ -25,6 +26,11 @@ def setup_session_directory(directory, input_video, force=False):
     if not os.path.exists(input_video):
         raise ValueError("%s does not exist" % input_video)
     input_video_directory, input_video_filename = os.path.split(input_video)
+    
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(directory)
+    if not os.path.exists(parent_dir):
+        os.makedirs(parent_dir)
     
     # Erase existing directory and create anew
     whiski_files = ['.mp4', '.avi', '.whiskers', '.tif', '.measurements',
@@ -39,7 +45,7 @@ def setup_session_directory(directory, input_video, force=False):
         
         # Get user confirmation
         if not force:
-            confirm = WhiskiWrap.raw_input('Ok to erase %s? [y/N]: ' % directory)
+            confirm = input('Ok to erase %s? [y/N]: ' % directory)
             if confirm.upper() != 'Y':
                 raise ValueError("did not receive permission to setup test")
         
@@ -57,7 +63,7 @@ def setup_session_directory(directory, input_video, force=False):
         raw_filename = os.path.split(filename)[1]
         shutil.copyfile(filename, os.path.join(directory, raw_filename))
     
-    return WhiskiWrap.utils.FileNamer.from_video(new_video_filename)
+    return wwutils.utils.FileNamer.from_video(new_video_filename)
 
 def run_benchmarks(benchmark_params, test_root, force=False):
     """Run the benchmarks
@@ -75,7 +81,7 @@ def run_benchmarks(benchmark_params, test_root, force=False):
         test_results : Dict from test['name'] to results read from hdf5 file
         durations : list of durations taken
     """
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
     
     test_results = {}
     durations = []    
@@ -104,7 +110,7 @@ def run_benchmarks(benchmark_params, test_root, force=False):
     
     return test_results, durations
 
-def run_standard_benchmarks(test_root='~/whiski_wrap_test', force=False,
+def run_standard_benchmarks(test_root=None, force=False,
     input_video=None, n_frames=None, epoch_sz=None,
     n_processes_l=(2, 4), chunk_size_l=(100, 300),
     ):
@@ -132,15 +138,16 @@ def run_standard_benchmarks(test_root='~/whiski_wrap_test', force=False,
     Returns: test_results, durations
     """
     # Check we have commands we need
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
     
     # Set up test root
-    test_root = normalize_path_and_optionally_get_permission(test_root,
-        force=force)
+    if test_root is None:
+        test_root = os.path.join(os.path.dirname(__file__), 'whiski_wrap_test')
+    test_root = normalize_path_and_optionally_get_permission(test_root, force=force)
     
     # Find the video to use
     if input_video is None:
-        input_video = os.path.join(WhiskiWrap.DIRECTORY, 'test_video_165s.mp4')
+        input_video = os.path.join(os.path.dirname(__file__), '../test_videos/test_video_165s.mp4')
     
     # Determine number of frames
     if n_frames is None:
@@ -171,7 +178,7 @@ def run_offset_test(test_root='~/whiski_wrap_test', start=1525, offset=5,
     n_frames=30, force=False):
     """Run a test where we offset the frame start"""
     # Check we have commands we need
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
     
     # Set up test root
     test_root = normalize_path_and_optionally_get_permission(test_root,
@@ -214,7 +221,7 @@ def normalize_path_and_optionally_get_permission(test_root, force=False):
 def run_standard(test_root='~/whiski_wrap_test', force=False):
     """Run a standard trace on a test file to get baseline time"""
     # Check we have commands we need
-    WhiskiWrap.utils.probe_needed_commands()
+    wwutils.utils.probe_needed_commands()
     
     # Set up test root
     test_root = normalize_path_and_optionally_get_permission(test_root,

@@ -1,13 +1,14 @@
 """WhiskiWrap provides tools for efficiently running whisk.
 
 This module contains the following sub-modules:
-    base - The basic functions for interacting with whisk. Everything is
-        imported from base into the main WhiskiWrap namespace.
-    tests - Benchmarks for running whiski
-    utils - utility functions for dealing with files and programs on the
-        system
-    video_utils - functions for dealing with video files, usually via
-        system calls to ffmpeg
+    base - The core functions for whisker tracing, measurement, and data processing.
+        Everything is imported from base into the main WhiskiWrap namespace.
+    wfile_io - Functions for reading and writing whisker (.whiskers) files
+    mfile_io - Functions for reading and writing measurement (.measurements) files
+
+Related packages:
+    wwutils - Utility functions including video processing, data loading, 
+              classification, plotting, and system utilities (separate package)
 
 To read Photonfocus double-rate files, you need to install libpfdoublerate
 This requires libboost_thread 1.50 to be installed to /usr/local/lib
@@ -16,27 +17,22 @@ And the libpfDoubleRate.so in this module's directory
 Here is an example workflow:
 
 import WhiskiWrap
-import tables
+import pandas as pd
 
-# Run the benchmarks
-test_results, durations = WhiskiWrap.tests.run_standard_benchmarks()
-
-# Run on data
-WhiskiWrap.pipeline_trace(
-    input_video_filename='my_input_video.mp4',
-    output_hdf5_filename='traced_whiskers.hdf5',
-    chunk_sz_frames=300, epoch_sz_frames=3000, frame_start=0, frame_stop=6000,
-    n_trace_processes=4)
+# Run whisker tracing on video data
+WhiskiWrap.interleaved_split_trace_and_measure(
+    input_reader=WhiskiWrap.FFmpegReader('my_input_video.mp4'),
+    tiffs_to_trace_directory='./trace_output',
+    output_filename='traced_whiskers.parquet',
+    chunk_size=200, n_trace_processes=4)
 
 # Load the results of that analysis
-with tables.open_file('traced_whiskers.hdf5') as fi:
-    test_results = pandas.DataFrame.from_records(fi.root.summary.read()) 
+traced_data = pd.read_parquet('traced_whiskers.parquet') 
 """
 
 from . import base
-from . import tests
 #import video_utils
-from ..wwutils import utils
+# Note: wwutils is a separate package - import it directly when needed
 import importlib
 importlib.reload(base)
 from .base import *
