@@ -36,3 +36,8 @@ from . import base
 import importlib
 importlib.reload(base)
 from .base import *
+from . import pipeline, io
+importlib.reload(pipeline)
+importlib.reload(io)
+from .io import *
+from .pipeline import *
