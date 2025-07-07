@@ -155,7 +155,11 @@ def define_parquet_schema(class_definition):
     return schema
 
 def write_chunk(chunk, chunkname, directory='.'):
-    tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
+    # Use imwrite for newer tifffile versions, fallback to imsave for older versions
+    if hasattr(tifffile, 'imwrite'):
+        tifffile.imwrite(os.path.join(directory, chunkname), chunk, compression=None)
+    else:
+        tifffile.imsave(os.path.join(directory, chunkname), chunk, compress=0)
 
 def trace_chunk(video_filename, delete_when_done=False):
     """Run trace on an input file
@@ -2497,9 +2501,15 @@ class ChunkedTiffWriter:
 
             # Write it
             if self.compress:
-                tifffile.imsave(chunkname, chunk, compression='lzw')
+                if hasattr(tifffile, 'imwrite'):
+                    tifffile.imwrite(chunkname, chunk, compression='lzw')
+                else:
+                    tifffile.imsave(chunkname, chunk, compression='lzw')
             else:
-                tifffile.imsave(chunkname, chunk, compression=False)
+                if hasattr(tifffile, 'imwrite'):
+                    tifffile.imwrite(chunkname, chunk, compression=None)
+                else:
+                    tifffile.imsave(chunkname, chunk, compression=False)
 
             # Update the counter
             self.frames_written += len(self.frame_buffer)
