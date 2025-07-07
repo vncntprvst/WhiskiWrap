@@ -31,6 +31,9 @@ setup(
       'opencv-python',  # Required for whiskerpad module
       'h5py',  # Required for combine_sides module
       'seaborn',  # Optional, for plotting
+      'plotly',  # Optional, for interactive plotting
+      'cmcrameri',  # Optional, for colormaps
+      'psutil',  # Optional, for system resource monitoring
       ],
    python_requires='>=3.10',
    include_package_data=True,
