@@ -36,7 +36,7 @@ with tables.open_file('traced_whiskers.hdf5') as fi:
 from . import base
 from . import tests
 #import video_utils
-from . import utils
+from ..wwutils import utils
 import importlib
 importlib.reload(base)
 from .base import *
