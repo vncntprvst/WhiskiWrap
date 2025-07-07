@@ -82,7 +82,7 @@ To use the pre-built binary (preferred):
     1. `git clone https://github.com/aiporre/whisk.git`
     2. Copy recursively `[Path-to-WhiskiWrap-Cloned-Repo]/whisk/lib/whisk/` to `[Path-to-whisk-Cloned-Repo]/whisk/`
     3. Install whisk package `cd [Path-to-whisk-Cloned-Repo] && pip install .`
-3. In the `WhiskiWrap` repo install now this package with:  `pip install .` 
+3. In the `WhiskiWrap` repo install now this package with: `uv pip install .` (or `pip install .` if not using uv)
 4. Test that everything worked by opening python or ipython and running `import WhiskiWrap`
 
 To build from source:
@@ -101,16 +101,80 @@ To build from source:
     3. In MacOS:  `echo 'export WHISKPATH=[Path-to-whisk-Cloned-Repo]/bin/' >> ~/.profile_bash`
 10. copy `cp libwhisk.so ../whisk` in Linux or mac, and `copy whisk.dll ..\whisk` in windows.
 11. 'cd ..'
-12. When you create your conda environment you should add whisk with `pip install .`
+12. When you create your conda environment you should add whisk with `uv pip install .` (or `pip install .` if not using uv)
 13. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
 14. You need to the binaries to then environmental variables `WHISKPATH` and/or `PATH` 
 
 ## Installing Python modules
-Here I outline the use of `conda` to manage and install Python modules. In the long run this is the easiest way. Unfortunately it doesn't work well with user-level `pip`. Specifically, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
 
-1. create conda environemnt `conda create -n WhiskiWrap python=3.9 pip` (optional PyEnv or the nominal Python environment can also work)
-2. activate with `conda activate WhiskiWrap` or `source activate WhiskiWrap`  (optionally replace `WhiskiWrap` by your conda environment)
-3. Installing WhiskWrap python module `pip install .` in the directory of this project
-4. Install other packages...:
-        `conda install scipy`
-        `pip install tifffile`
+### Recommended: Using uv (Modern Python Package Manager)
+
+The easiest and fastest way to install WhiskiWrap is using [uv](https://docs.astral.sh/uv/), a modern Python package manager. This project now includes a `pyproject.toml` file that makes installation with uv straightforward.
+
+**Requirements**:
+
+* Python 3.10 or higher
+* Some dependencies may require compilation. If you encounter build errors:
+  * On Debian/Ubuntu: `sudo apt-get install python3-dev build-essential`
+  * On Fedora/RHEL: `sudo dnf install python3-devel gcc`
+  * On macOS: `xcode-select --install`
+  * On Windows: Install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+
+1. First, install uv if you haven't already:
+
+   For Windows, you can download the installer from the [uv releases page](https://github.com/astral-sh/uv/releases).
+   For Linux and macOS, you can use the following command to install uv:
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+2. **Option A: Install in an isolated virtual environment (Recommended)**
+   
+   Create and activate a virtual environment, then install WhiskiWrap:
+
+   ```bash
+   uv venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv pip install -e .
+   ```
+   
+   This keeps WhiskiWrap and its dependencies isolated from your system Python and other projects.
+
+3. **Option B: Install globally (simpler but less isolated)**
+   
+   Install WhiskiWrap system-wide:
+
+   ```bash
+   uv pip install -e .  # Development mode
+   # or
+   uv pip install .     # Normal installation
+   ```
+   
+   This makes WhiskiWrap available everywhere but may cause dependency conflicts with other projects.
+
+The `pyproject.toml` file will automatically handle all the dependencies, including matplotlib and easygui.
+
+**Important**: If you chose Option A (virtual environment), you'll need to activate the environment each time you want to use WhiskiWrap:
+
+```bash
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+Then you can use WhiskiWrap as described in the examples above.
+
+### Alternative: Using conda (Traditional Method)
+
+If you prefer using conda to manage and install Python modules:
+
+1. Create conda environment: `conda create -n WhiskiWrap python=3.10 pip` (conda automatically installs required build dependencies)
+2. Activate with: `conda activate WhiskiWrap`
+3. Install WhiskiWrap: `pip install .` in the directory of this project
+4. Install additional packages if needed:
+
+   ```bash
+   conda install scipy matplotlib
+   pip install tifffile easygui
+   ```
+
+Note: When using conda, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.

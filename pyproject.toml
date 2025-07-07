@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "numpy", "Cython"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "WhiskiWrap"
+version = "1.2.1"
+description = "Whisk package wrapper created by cxrodgers"
+readme = "README.md"
+authors = [
+    {name = "Chris Rodgers"},
+    {name = "Ariel Iporre"},
+    {name = "Vincent Prevosto"},
+]
+maintainers = [
+    {name = "vncntprvst"}
+]
+license = {file = "LICENSE.txt"}
+dependencies = [
+    "tables>=3.5.1",
+    "pandas",
+    "MediaInfo",
+    "future",
+    "tifffile",
+    "imagecodecs",
+    "statsmodels",
+    "ffmpeg-python>=0.2.0",
+    "whisk-janelia[ffmpeg]",
+    "zarr",
+    "pyarrow",
+    "matplotlib",
+    "easygui",
+]
+requires-python = ">=3.10"
+
+[project.urls]
+Homepage = "http://pypi.python.org/pypi/WhiskiWrap/"
+
+[tool.setuptools.packages.find]
+include = ["WhiskiWrap*", "wwutils*"]

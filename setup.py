@@ -26,6 +26,9 @@ setup(
       'whisk-janelia[ffmpeg]',
       'zarr',
       'pyarrow',
+      'matplotlib',
+      'easygui',
       ],
+   python_requires='>=3.10',
    include_package_data=True,
 )
