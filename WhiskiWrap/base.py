@@ -1928,7 +1928,7 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     stop_after_frame=None, delete_tiffs=True,
     timestamps_filename=None, monitor_video=None,
     monitor_video_kwargs=None, write_monitor_ffmpeg_stderr_to_screen=False,
-    h5_filename=None, frame_func=None,
+    h5_filename=None, parquet_filename=None, frame_func=None,
     n_trace_processes=4, expectedrows=1000000,
     verbose=True, skip_stitch=False,
     ):
@@ -1988,7 +1988,17 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
 
     # Setup the result file
     if not skip_stitch:
-        setup_hdf5(h5_filename, expectedrows)
+        # Determine output format based on provided filenames
+        output_filename = None
+        if h5_filename is not None:
+            output_filename = h5_filename
+            setup_hdf5(h5_filename, expectedrows)
+        elif parquet_filename is not None:
+            output_filename = parquet_filename
+            # Create temporary directory for parquet chunks
+            temp_dir = tempfile.mkdtemp()
+        else:
+            raise ValueError("Either h5_filename or parquet_filename must be provided")
 
     # Copy the parameters files
     copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
@@ -2112,13 +2122,33 @@ def interleaved_reading_and_tracing(input_reader, tiffs_to_trace_directory,
     if not skip_stitch:
         print("Stitching")
         zobj = list(zip(tif_sorted_file_numbers, tif_sorted_filenames))
-        for chunk_start, chunk_name in zobj:
-            # Append each chunk to the hdf5 file
-            fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
-            append_whiskers_to_hdf5(
-                whisk_filename=fn.whiskers,
-                h5_filename=h5_filename,
-                chunk_start=chunk_start)
+        
+        if h5_filename is not None:
+            # HDF5 stitching
+            for chunk_start, chunk_name in zobj:
+                # Append each chunk to the hdf5 file
+                fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+                append_whiskers_to_hdf5(
+                    whisk_filename=fn.whiskers,
+                    h5_filename=h5_filename,
+                    chunk_start=chunk_start)
+        elif parquet_filename is not None:
+            # Parquet stitching
+            for chunk_start, chunk_name in zobj:
+                # Process each chunk to parquet format
+                fn = WhiskiWrap.utils.FileNamer.from_tiff_stack(chunk_name)
+                process_and_write_parquet(
+                    whiskers_filename=fn.whiskers,
+                    chunk_start=chunk_start,
+                    face_side='NA',
+                    temp_dir=temp_dir)
+            
+            # Merge all parquet files
+            merge_parquet_files(temp_dir, parquet_filename)
+            
+            # Clean up temporary directory
+            import shutil
+            shutil.rmtree(temp_dir)
 
     # Finalize writers
     ctw.close()
