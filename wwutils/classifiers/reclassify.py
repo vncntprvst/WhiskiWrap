@@ -25,8 +25,10 @@ import sys
 import json
 import os
 import argparse
-import wwutils.plots as plots
-from wwutils.data_manip import load_data as ld
+import wwutils
+# Dynamic import of plotting and data loading to avoid circular imports
+plots = getattr(wwutils, 'plot_overlay', None)
+ld = getattr(wwutils, 'load_whisker_data', None)
 
 # %%
 ############# Define Functions ############

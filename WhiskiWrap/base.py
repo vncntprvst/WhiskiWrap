@@ -71,8 +71,11 @@ else:
     print('WHISKPATH detected: ', whisk_path)
 
 # Import external utilities
-from wwutils.video_utils import video
 import wwutils
+try:
+    video = wwutils.video_utils.video
+except (AttributeError, ImportError):
+    video = None
 
 from .io import PFReader, ChunkedTiffWriter, FFmpegReader, FFmpegWriter
 

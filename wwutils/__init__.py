@@ -10,5 +10,10 @@ from . import plots
 from . import whisk_permissions
 from . import utils
 from .classifiers import reclassify, unet_classifier
+# Add missing imports for pipeline scripts
+from . import whiskerpad
+from .data_manip import combine_sides
+# Use plots module (plot_overlay is now a function in plots.py)
+plot_overlay = plots
 
-# shortcutsfrom .misc import rint, pick, pick_rows, printnow, globjoin
+# shortcuts from .misc import rint, pick, pick_rows, printnow, globjoin

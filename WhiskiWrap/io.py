@@ -21,7 +21,11 @@ import scipy.io
 import ctypes
 import wwutils
 import tifffile
-from wwutils.video_utils import video
+# Dynamic import of video utility to avoid stub import errors
+try:
+    video = wwutils.video_utils.video
+except (AttributeError, ImportError):
+    video = None
 import subprocess
 import time
 

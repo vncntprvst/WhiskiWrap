@@ -88,11 +88,12 @@ import time
 import gc
 import WhiskiWrap as ww
 # from wwutils.data_manip import load_data as ld
-from wwutils import whiskerpad as wp
-from wwutils.data_manip import combine_sides as cs
-from wwutils.classifiers import reclassify as rc
-from wwutils import unet_classifier as uc
-from wwutils import plots as po
+import wwutils
+wp = wwutils.whiskerpad
+cs = wwutils.combine_sides
+rc = wwutils.reclassify
+uc = wwutils.unet_classifier
+po = wwutils.plot_overlay
 
 def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
     """
