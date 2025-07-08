@@ -1,8 +1,9 @@
 # WhiskiWrap
 WhiskiWrap provides tools for running [whisk](http://whiskertracking.janelia.org) more easily and efficiently.
-The codebase is now split into multiple modules: `base` for core utilities, `pipeline` for high-level workflows, and `io` for video I/O classes.
 
-My goal is to improve whisk in the following ways:
+The codebase is split into multiple modules: `base` for core utilities, `pipeline` for high-level workflows, and `io` for video I/O classes.
+
+The goal is to improve whisk in the following ways:
 
 1. Make it more flexible about reading various input files. In my experience whisk has trouble reading certain input videos. Instead, WhiskiWrap uses your system's ffmpeg to read input files (because ffmpeg can typically read almost anything) and to generate simple tiff stacks which whisk can reliably read.
 2. Make it faster, by calling many instances of `trace` in parallel on non-overlapping chunks of the input video.

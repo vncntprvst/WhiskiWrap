@@ -5,9 +5,9 @@ from . import bootstrap
 from . import misc
 from . import stats
 from . import video
-from . import dataload
+from . import load_data
+from . import plot
 from . import whisk_permissions
 from . import utils
 
-# shortcuts
-from .misc import rint, pick, pick_rows, printnow, globjoin
+# shortcutsfrom .misc import rint, pick, pick_rows, printnow, globjoin
