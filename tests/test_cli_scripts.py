@@ -20,12 +20,12 @@ STUB_MODULES = {
     "wwutils": types.ModuleType("wwutils"),
 }
 for sub in [
-    "load_whisker_data",
+    "dataload",
     "whiskerpad",
     "combine_sides",
     "reclassify",
     "unet_classifier",
-    "plot_overlay",
+    "plot",
 ]:
     setattr(STUB_MODULES["wwutils"], sub, types.ModuleType(sub))
 

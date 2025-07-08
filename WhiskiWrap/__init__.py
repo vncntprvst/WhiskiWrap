@@ -34,5 +34,9 @@ from . import base
 #import video_utils
 # Note: wwutils is a separate package - import it directly when needed
 import importlib
-importlib.reload(base)
-from .base import *
+importlib.reload(base)from .base import *
+from . import pipeline, io
+importlib.reload(pipeline)
+importlib.reload(io)
+from .io import *
+from .pipeline import *

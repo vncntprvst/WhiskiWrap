@@ -25,7 +25,7 @@ import tempfile
 # Try to import WhiskiWrap for .whiskers file support
 try:
     import WhiskiWrap as ww
-    from wwutils.load_whisker_data import get_summary
+    from wwutils.dataload import get_summary
     WHISKIWRAP_AVAILABLE = True
 except ImportError:
     WHISKIWRAP_AVAILABLE = False

@@ -1,5 +1,7 @@
 # WhiskiWrap
 WhiskiWrap provides tools for running [whisk](http://whiskertracking.janelia.org) more easily and efficiently.
+The codebase is now split into multiple modules: `base` for core utilities, `pipeline` for high-level workflows, and `io` for video I/O classes.
+The `wwutils` helpers were also consolidated so plotting, video, and data loading utilities live in fewer files.
 
 My goal is to improve whisk in the following ways:
 
