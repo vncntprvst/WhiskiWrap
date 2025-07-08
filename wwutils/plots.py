@@ -1,5 +1,20 @@
-"""Wrapper functions with boilerplate code for making plots the way I like them
+""" 
+This script reads whisker tracking data from HDF5 or Parquet and overlays whiskers on video frames.
+
+Usage:
+    python plots.py <video_file> [--base_name <base_name>] [--fid_num <fid_num>]
+    
+Arguments:
+    video_file: Path to the video file
+    base_name: Base name for output files (default: None)
+    fid_num: Frame number to overlay (default: 0)
+    
+Example:
+    python plots.py /path/to/video.mp4 --base_name behavior_video --fid_num 100
+
+Contains utility functions for plotting and legacy wrappers.
 """
+
 from __future__ import print_function
 from __future__ import absolute_import
 from __future__ import division
@@ -8,15 +23,30 @@ from builtins import map
 from builtins import range
 from past.utils import old_div
 
+import os
+import warnings
+from pathlib import Path
+import argparse
+import multiprocessing
+from functools import partial
+import tempfile
+
+import cv2
+import numpy as np
+import pandas as pd
 import matplotlib
-import matplotlib.patheffects as pe
-import numpy as np, warnings
 import matplotlib.pyplot as plt
-import matplotlib.mlab as mlab
+import matplotlib.patheffects as pe
+
+import seaborn as sns
+import plotly.graph_objects as go
+
 import scipy.stats
+from cmcrameri import cm
+
 from . import misc
-import wwutils
-import pandas
+from .data_manip import load_data as ld
+from wwutils import misc, plots, stats
 
 def alpha_blend_with_mask(rgb0, rgb1, alpha0, mask0):
     """Alpha-blend two RGB images, masking out one image.
@@ -202,7 +232,7 @@ def smooth_and_plot_versus_depth(
         to_smooth = sub_data.set_index('Z_corrected')[colname]
         
         # Smooth
-        smoothed = wwutils.misc.gaussian_sum_smooth_pandas(
+        smoothed = misc.gaussian_sum_smooth_pandas(
             to_smooth, depth_bins, sigma=sigma)
         
         # Plot the individual data points
@@ -221,7 +251,7 @@ def smooth_and_plot_versus_depth(
     
     
     ## Pretty
-    wwutils.plot.despine(ax)
+    plots.despine(ax)
 
     ax.set_xticks((0, 500, 1000, 1500))
     ax.set_xlim((0, 1500))
@@ -421,7 +451,7 @@ def plot_by_depth_and_layer(df, column, combine_layer_5=True, aggregate='median'
     ax.set_xticks((200, 600, 1000, 1400))
     ax.set_xticklabels([])
     ax.set_xlim((100, 1500))
-    wwutils.plot.despine(ax)
+    plots.despine(ax)
     ax.set_xlabel('depth in cortex')
     
     return ax
@@ -429,7 +459,7 @@ def plot_by_depth_and_layer(df, column, combine_layer_5=True, aggregate='median'
 def connected_pairs(v1, v2, p=None, signif=None, shapes=None, colors=None, 
     labels=None, ax=None):
     """Plot columns of (v1, v2) as connected pairs"""
-    import wwutils.stats
+
     if ax is None:
         f, ax = plt.subplots()
     
@@ -474,7 +504,7 @@ def connected_pairs(v1, v2, p=None, signif=None, shapes=None, colors=None,
             mec=color, mfc='none', lw=4)
         
         # Sigtest on pop
-        utest_res = wwutils.stats.r_utest(col1[~np.isnan(col1)], col2[~np.isnan(col2)],
+        utest_res = stats.r_utest(col1[~np.isnan(col1)], col2[~np.isnan(col2)],
             paired='TRUE', fix_float=1e6)
         if utest_res['p'] < 0.05:
             ax.text(np.mean([x1, x2]), 1.0, '*', va='top', ha='center')
@@ -1163,7 +1193,7 @@ def harmonize_clim_in_subplots(fig=None, axa=None, clim=(None, None),
 
 def generate_colorbar(n_colors, mapname='jet', rounding=100, start=0., stop=1.):
     """Generate N evenly spaced colors from start to stop in map"""
-    color_idxs = wwutils.rint(rounding * np.linspace(start, stop, n_colors))[::-1]
+    color_idxs = ut_rint(rounding * np.linspace(start, stop, n_colors))[::-1]
     colors = plt.cm.get_cmap('jet', rounding)(color_idxs)
     return colors
 
@@ -1501,7 +1531,7 @@ def grouped_bar_plot(df,
         group_names = df.index.get_level_values(0).drop_duplicates()
         
         # Error check that the groups are contiguous
-        new_df = pandas.concat(
+        new_df = pd.concat(
             [df.xs(group_name, level=0, drop_level=False) 
             for group_name in group_names]
             )
@@ -1632,79 +1662,8 @@ def grouped_bar_plot(df,
                 ax.text(group_center, text_ypos, group_name, 
                     ha='center', va='center',
                     **group_name_kwargs)
-        return ax, bar_container"""
-This script reads the whisker tracking data from an HDF5 or Parquet file and overlays the whisker tracking on a video frame.
-
-Usage:
-    python plot_overlay.py <video_file> [--base_name <base_name>] [--fid_num <fid_num>]
+        return ax, bar_container
     
-Arguments:
-    video_file: Path to the video file
-    base_name: Base name of the video file (default: None)
-    fid_num: Frame number to overlay whiskers on (default: 0)
-    
-Example:
-    python plot_overlay.py /path/to/video.mp4 --base_name behavior_video --fid_num 100
-"""
-
-import os
-import cv2
-from pathlib import Path
-import tables
-# import numpy as np
-import pyarrow.parquet as pq
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import argparse
-import json
-from cmcrameri import cm
-import multiprocessing
-from functools import partial
-# from concurrent.futures import ProcessPoolExecutor
-import tempfile
-
-def load_whisker_data(base_name, data_dir):
-    """Load whisker data from HDF5 or Parquet."""
-    print(f"Loading whisker data from {data_dir}/{base_name}")
-    if os.path.exists(f'{data_dir}/{base_name}.hdf5'):
-        with tables.open_file(f'{data_dir}/{base_name}.hdf5', mode='r') as h5file:
-            pixels_x = h5file.get_node('/pixels_x')
-            pixels_y = h5file.get_node('/pixels_y')
-            summary = h5file.get_node('/summary')
-            df = pd.DataFrame(summary[:])
-            df['pixels_x'] = [pixels_x[i] for i in df['wid']]
-            df['pixels_y'] = [pixels_y[i] for i in df['wid']]
-        return df
-    
-    elif os.path.exists(f'{data_dir}/{base_name}.parquet'):
-        parquet_file = f'{base_name}.parquet'
-        table = pq.read_table(f'{data_dir}/{parquet_file}')
-        df = table.to_pandas()
-        return df
-
-    else:
-        raise FileNotFoundError("No valid whisker data file found")
-
-def get_longest_whiskers_data(df, fid_num):
-    """Get the longest whiskers for the specified frame."""
-    frame_df = df[df['fid'] == fid_num]
-    sides = frame_df['face_side'].unique()
-
-    longest_whiskers = []
-    for side in sides:
-        side_df = frame_df[frame_df['face_side'] == side]
-        longest_whiskers.append(side_df.nlargest(3, 'pixel_length'))
-
-    return longest_whiskers
-
-def get_whiskers_data(df, fid_num, wids):
-    """Get whisker data for the specified frame and whisker IDs."""
-    frame_df = df[df['fid'] == fid_num]
-    whisker_data = []
-    for wid in wids:
-        whisker_data.append(frame_df[frame_df['wid'] == wid])
-    return whisker_data
 
 def get_colors(numb_colors=10):
     """Get a list of colors for plotting whiskers."""
@@ -1727,27 +1686,6 @@ def get_colors(numb_colors=10):
     combined_colors = colors[:half] + colors[-half:]
     
     return combined_colors
-
-def get_whiskerpad_params(whiskerpad_file):
-    if os.path.exists(whiskerpad_file):
-        with open(whiskerpad_file, 'r') as f:
-            whiskerpad_params = json.load(f)
-            
-        # Get the face side(s) and whiskerpad location
-        face_sides = [whiskerpad['FaceSide'].lower() for whiskerpad in whiskerpad_params['whiskerpads']]
-        
-        whiskerpad_location = {}
-        
-        if len(face_sides) == 1:
-            return np.array([0, 0]), face_sides
-        else:
-            image_coord = np.zeros((len(face_sides), 2))
-            for i in range(len(whiskerpad_params['whiskerpads'])):
-                whiskerpad_location[face_sides[i]] = whiskerpad_params['whiskerpads'][i]['Location']
-                image_coord[i] = whiskerpad_params['whiskerpads'][i]['Location']
-            return image_coord, face_sides, whiskerpad_location
-    else:
-        raise FileNotFoundError("Whiskerpad file provided but not found") 
 
 def plot_whiskers_on_frame(whisker_data, frame, colors):
     """Plot the whiskers on a video frame."""
@@ -1782,10 +1720,10 @@ def plot_frame_overlay(video_file, base_name, fid_num=0):
                 
     # Load whisker data
     print(f"Loading whisker data for video: {video_file}")
-    df = load_whisker_data(base_name, data_dir)
+    df = ld.load_whisker_data(base_name, data_dir)
 
     # Get the longest whiskers for the specified frame
-    longest_whiskers = get_longest_whiskers_data(df, fid_num)
+    longest_whiskers = ld.get_longest_whiskers_data(df, fid_num)
 
     # Read the corresponding video frame
     cap = cv2.VideoCapture(video_file)
@@ -1807,7 +1745,7 @@ def plot_frame_overlay(video_file, base_name, fid_num=0):
 def process_frame_with_data(video_file, whisker_data, base_name, fid_num, colors):
     """Process a single frame for whisker overlay with preloaded whisker data."""
     # Get the longest whiskers for the specified frame
-    longest_whiskers = get_longest_whiskers_data(whisker_data, fid_num)
+    longest_whiskers = ld.get_longest_whiskers_data(whisker_data, fid_num)
 
     # Read the corresponding video frame
     cap = cv2.VideoCapture(video_file)
@@ -1841,7 +1779,7 @@ def read_video_frames(video_file):
 def single_frame_overlay(frame, whisker_data, fid_num, wids, colors):
     """Process a single frame with preloaded whisker data."""
     # Get whisker data for the specified frame and whisker IDs
-    whisker_data = get_whiskers_data(whisker_data, fid_num, wids)
+    whisker_data = ld.get_whiskers_data(whisker_data, fid_num, wids)
 
     # Plot whiskers on the frame
     frame_with_overlay = plot_whiskers_on_frame(whisker_data, frame, colors)
@@ -1886,7 +1824,7 @@ def plot_video_overlay(video_file, base_name, wids=None, output_video_file=None,
 
     # Load whisker data once
     print(f"Loading whisker data for video: {video_file}")
-    whisker_data = load_whisker_data(base_name, data_dir)
+    whisker_data = ld.load_whisker_data(base_name, data_dir)
     
     if wids is None:
         # Get wids of the 3 longest whiskers on each side
@@ -1933,6 +1871,193 @@ def plot_video_overlay(video_file, base_name, wids=None, output_video_file=None,
     out.release()
     print(f"Video with overlay saved to {output_video_file}")
 
+def plot_summary_distributions(summary, h5_filename):
+    #  Plot the distribution of pixel_length, and score. 
+    #  Save the plot to the same directory as the input file
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    ax[0].hist(summary['pixel_length'], bins=50)
+    ax[0].set_title('Pixel Length Distribution')
+    ax[0].set_xlabel('Pixel Length')
+    ax[0].set_ylabel('Frequency')
+    ax[1].hist(summary['score'], bins=50)
+    ax[1].set_title('Score Distribution')
+    ax[1].set_xlabel('Score')
+    ax[1].set_ylabel('Frequency')
+    plt.savefig(h5_filename.replace('.hdf5', '_summary.png'))
+    plt.close()
+
+def plot_angle_traces(loaded_data, output_filename):
+    # plot wid 0, 1 and 2 angle traces
+    import matplotlib.pyplot as plt
+    # angle = loaded_data[loaded_data['wid'] == 0]['angle']
+    # plt.plot(angle)
+    # plt.title('Angle trace for wid 0')
+    for wid in range(3):
+        angle = loaded_data[loaded_data['wid'] == wid]['angle']
+        plt.plot(angle)
+    plt.title('Angle traces for wids 0, 1, and 2')
+    plt.xlabel('Frame')
+    plt.ylabel('Angle')
+    plt.savefig(output_filename.replace('.hdf5', '_angle_traces.png'))
+    plt.close()
+
+def plot_whisker_data(df, length_threshold=20, score_threshold=100):
+    """
+    Plots average score and length per whisker ID with horizontal threshold lines.
+
+    Parameters:
+    df (DataFrame): The input data frame containing 'face_side', 'wid', 'score', and 'length' columns.
+    length_threshold (int): The threshold value for length.
+    score_threshold (int): The threshold value for score.
+    """
+    # Group data for the first plot
+    grouped_score = df.groupby(['face_side', 'wid'])['score'].mean().reset_index()
+
+    # Group data for the second plot
+    grouped_length = df.groupby(['face_side', 'wid'])['length'].mean().reset_index()
+
+    # Create a figure with two subplots side by side
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # First plot: Average Score per Whisker ID (wid)
+    sns.scatterplot(ax=axes[0], x='wid', y='score', hue='face_side', data=grouped_score)
+    axes[0].axhline(score_threshold, color='red', linestyle='--', label=f'Score Threshold ({score_threshold})')
+    axes[0].set_title('Average Score per Whisker ID (wid)')
+    axes[0].set_xlabel('Whisker ID (wid)')
+    axes[0].set_ylabel('Average Score')
+    axes[0].legend(title='Face Side')
+
+    # Second plot: Average Length per Whisker ID (wid)
+    sns.scatterplot(ax=axes[1], x='wid', y='length', hue='face_side', data=grouped_length)
+    axes[1].axhline(length_threshold, color='red', linestyle='--', label=f'Length Threshold ({length_threshold})')
+    axes[1].set_title('Average Length per Whisker ID (wid)')
+    axes[1].set_xlabel('Whisker ID (wid)')
+    axes[1].set_ylabel('Average Length')
+    axes[1].legend(title='Face Side')
+
+    # Show the plots
+    plt.tight_layout()
+    plt.show()
+
+def plot_whisker_angle(w_times, w_angles, wids):
+    fig = go.Figure()
+
+    # Add data for each whisker
+    for w_time, w_angle, wid in zip(w_times, w_angles, wids):
+        fig.add_trace(go.Scatter(
+            x=w_time,
+            y=w_angle,
+            mode='lines',
+            name=f'wid {wid}'
+        ))
+
+    fig.update_layout(
+        title='Angle Over Time for Multiple Whiskers',
+        xaxis_title='Frame ID',
+        yaxis_title='Angle (degrees)',
+        legend_title='Legend',
+        template='plotly_white'
+    )
+
+    fig.show()
+
+def plot_whisker_curvature(w_times, w_curvatures, wids, pairing=False):
+    fig = go.Figure()
+
+    # Add data for each whisker
+    for i, (w_time, w_curvature, wid) in enumerate(zip(w_times, w_curvatures, wids)):
+        line_style = 'lines'
+        # if pairing and i % 2 == 1:
+        #     line_style = 'lines+markers'
+        
+        fig.add_trace(go.Scatter(
+            x=w_time,
+            y=w_curvature,
+            mode='lines',
+            name=f'wid {wid}',
+            line=dict(dash='dash' if pairing and i % 2 == 1 else 'solid')
+        ))
+
+    fig.update_layout(
+        title='Whisker Curvature Over Time for Multiple Whiskers',
+        xaxis_title='Frame ID',
+        yaxis_title='Curvature',
+        legend_title='Legend',
+        template='plotly_white'
+    )
+
+    fig.show()
+    
+def plot_whisker_follicle_loc(w_fol_xs, w_fol_ys, wids):
+    fig = go.Figure()
+
+    # Add data for each whisker
+    for w_fol_x, w_fol_y, wid in zip(w_fol_xs, w_fol_ys, wids):
+        fig.add_trace(go.Scatter(
+            x=w_fol_x,
+            y=w_fol_y,
+            mode='lines',
+            name=f'wid {wid}'
+        ))
+
+    fig.update_layout(
+        title='Whisker Follicle Location for Multiple Whiskers',
+        xaxis_title='Frame X Position',
+        yaxis_title='Follicle Y Position',
+        legend_title='Legend',
+        template='plotly_white'
+    )
+
+    fig.show()
+ 
+def plot_overlay_single_frame(data_dir, video_file, frame_data, frame_num):
+    """
+    Deprecated function? See plot_frame_overlay
+    """
+    
+    cap = cv2.VideoCapture(f'{data_dir}/{video_file}')
+
+    # Read frames sequentially until the desired frame
+    # Setting the frame position with CAP_PROP_POS_FRAMES does not work for all video formats
+    current_frame = 0
+    while current_frame < frame_num:
+        ret, frame = cap.read()
+        if not ret:
+            print(f"Failed to read frame at position {current_frame}")
+            break
+        current_frame += 1
+
+    # Verify the frame position
+    print(f"Current frame position: {current_frame}")
+
+    # Display the frame
+    plt.figure(figsize=(8, 6))    
+    
+    # Create set of colors for up to 20 whiskers, starting with red, green, blue
+    colors = [(255,0,0), (0,255,0), (0,0,255), (255,255,0), (255,0,255),
+                (0,255,255), (128,0,0), (0,128,0), (0,0,128), (128,128,0),
+                (128,0,128), (0,128,128), (64,0,0), (0,64,0), (0,0,64),
+                (64,64,0), (64,0,64), (0,64,64), (192,0,0), (0,192,0)]
+    
+    for index, whisker_data in frame_data.iterrows():
+        color_index = index % len(colors)
+        color = colors[color_index]
+        print(f"Whisker ID: {whisker_data['wid']}, color: {color}")
+
+        print(whisker_data['pixels_x'][0], whisker_data['pixels_y'][0])
+        for j in range(whisker_data['pixels_x'].shape[0]):
+            x = int(whisker_data['pixels_x'][j])
+            y = int(whisker_data['pixels_y'][j])
+            cv2.circle(frame, (x, y), 2, color, -1)
+            
+    plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    
+    # Save the plot
+    plt.savefig(f'{data_dir}/plots/overlay_frame_{frame_num}.png')
+
+    cap.release()      
 
 if __name__ == "__main__":
     # get the path to the video file from the arguments using argparse

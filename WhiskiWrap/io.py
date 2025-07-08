@@ -21,7 +21,7 @@ import scipy.io
 import ctypes
 import wwutils
 import tifffile
-from wwutils import video
+from wwutils.video_utils import video
 import subprocess
 import time
 

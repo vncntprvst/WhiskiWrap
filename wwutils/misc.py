@@ -24,7 +24,7 @@ import wwutils
 import pandas
 
 ## Deprecated stuff
-from wwutils.video import OutOfFrames
+from wwutils.video_utils.video import OutOfFrames
 
 def frame_dump(*args, **kwargs):
     warnings.warn("use wwutils.video instead of wwutils.misc", stacklevel=2)
@@ -1431,13 +1431,13 @@ def find_image_shift(img0, img1):
     
     #~ # Debug plot
     #~ f, axa = plt.subplots(2, 2)
-    #~ wwutils.plot.imshow(img0, ax=axa[0, 0])
+    #~ wwutils.plots.imshow(img0, ax=axa[0, 0])
     #~ axa[0, 0].set_title('img0')
-    #~ wwutils.plot.imshow(img1, ax=axa[0, 1])
+    #~ wwutils.plots.imshow(img1, ax=axa[0, 1])
     #~ axa[0, 1].set_title('img1')
-    #~ wwutils.plot.imshow(scipy.ndimage.shift(img0, displacement), ax=axa[1, 1])
+    #~ wwutils.plots.imshow(scipy.ndimage.shift(img0, displacement), ax=axa[1, 1])
     #~ axa[1, 1].set_title('img0 shifted to look like img1')
-    #~ wwutils.plot.imshow(scipy.ndimage.shift(img1, -displacement), ax=axa[1, 0])
+    #~ wwutils.plots.imshow(scipy.ndimage.shift(img1, -displacement), ax=axa[1, 0])
     #~ axa[1, 0].set_title('img1 shifted to look like img0')
     
     return displacement
@@ -1601,8 +1601,8 @@ def gaussian_sum_smooth_pandas(data, evaluation_index, sigma,
     return ser
 
 def load_bwid(*args, **kwargs):
-    print("warning: replace wwutils.misc.load_bwid with wwutils.dataload.load_bwid")
-    return wwutils.load_data.load_bwid(*args, **kwargs)
+    print("warning: replace wwutils.misc.load_bwid with wwutils.data_manip.load_data.load_bwid")
+    return wwutils.data_manip.load_data.load_bwid(*args, **kwargs)
     
 def stack_df_to_series(df):
     """Stack DataFrame until it becomes a series"""

@@ -28,7 +28,7 @@ import tempfile
 import shutil
 import re
 import itertools
-from wwutils import video
+from wwutils.video_utils import video
 import wwutils
 from .base import copy_parameters_files, setup_hdf5, write_chunk, trace_chunk, measure_chunk, trace_and_measure_chunk, append_whiskers_to_hdf5, append_whiskers_to_parquet, merge_parquet_files, process_and_write_zarr, consolidate_zarr_metadata, initialize_zarr, read_whisker_data, whisk_path, extract_chunk_number, process_and_write_parquet
 from .io import ChunkedTiffWriter, FFmpegWriter
