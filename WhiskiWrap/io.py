@@ -1,3 +1,20 @@
+"""Input/output classes for reading and writing video and data files.
+
+This module provides classes for reading various input formats and writing output:
+
+Reader classes:
+* FFmpegReader - Read video files using ffmpeg subprocess
+* PFReader - Read Photonfocus modulated data from MATLAB files
+* ChunkedTiffWriter - Write video frames as chunked TIFF stacks
+* FFmpegWriter - Write compressed video using ffmpeg subprocess
+
+The readers provide a common interface with iter_frames() method for frame-by-frame
+processing. Writers handle buffering and format conversion.
+
+These classes are designed to work with the pipeline functions for efficient
+video processing workflows.
+"""
+
 import os
 import numpy as np
 import scipy.io
@@ -7,7 +24,9 @@ import tifffile
 from wwutils import video
 import subprocess
 import time
-from .base import LIB_DOUBLERATE
+
+# libpfDoubleRate library, needed for PFReader
+LIB_DOUBLERATE = os.path.join(os.path.split(__file__)[0], 'libpfDoubleRate.so')
 
 class PFReader:
     """Reads photonfocus modulated data stored in matlab files"""
@@ -163,7 +182,7 @@ class PFReader:
                     modulated_frame_width)
 
                 # Extract the result from the buffer
-                demodulated_frame = np.fromstring(demodulated_frame_buffer,
+                demodulated_frame = np.fromstring(demulated_frame_buffer,
                     dtype=np.uint8).reshape(
                     frame_height, demodulated_frame_width)
 

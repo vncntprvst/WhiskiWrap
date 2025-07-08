@@ -1,8 +1,9 @@
 """WhiskiWrap provides tools for efficiently running whisk.
 
-This module contains the following sub-modules:
-    base - The core functions for whisker tracing, measurement, and data processing.
-        Everything is imported from base into the main WhiskiWrap namespace.
+This package contains the following modules:
+    base - Core functions for whisker tracing, measurement, and data processing
+    pipeline - High-level pipeline functions for processing video data
+    io - Input/output classes for reading/writing video and data files
     wfile_io - Functions for reading and writing whisker (.whiskers) files
     mfile_io - Functions for reading and writing measurement (.measurements) files
 
@@ -14,7 +15,7 @@ To read Photonfocus double-rate files, you need to install libpfdoublerate
 This requires libboost_thread 1.50 to be installed to /usr/local/lib
 And the libpfDoubleRate.so in this module's directory
 
-Here is an example workflow:
+Example workflow:
 
 import WhiskiWrap
 import pandas as pd
@@ -30,14 +31,10 @@ WhiskiWrap.interleaved_split_trace_and_measure(
 traced_data = pd.read_parquet('traced_whiskers.parquet') 
 """
 
-from . import base
-#import video_utils
-# Note: wwutils is a separate package - import it directly when needed
-import importlib
-importlib.reload(base)
+# Import all modules
+from . import base, pipeline, io, wfile_io, mfile_io
+
+# Import key functions and classes into the main namespace
 from .base import *
-from . import pipeline, io
-importlib.reload(pipeline)
-importlib.reload(io)
 from .io import *
 from .pipeline import *

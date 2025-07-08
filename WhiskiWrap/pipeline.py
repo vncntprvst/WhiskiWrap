@@ -1,3 +1,24 @@
+"""High-level pipeline functions for whisker tracking workflows.
+
+This module contains the main pipeline algorithms for processing video data:
+* interleaved_split_trace_and_measure() - Primary function for processing videos
+* interleaved_read_trace_and_measure() - Legacy HDF5-based pipeline  
+* pipeline_trace() - Deprecated chunked tracing strategy
+* compress_pf_to_video() - Convert Photonfocus data to compressed video
+
+The interleaved algorithms efficiently process video by:
+1. Reading video chunks with ffmpeg
+2. Writing chunks as TIFF stacks  
+3. Running trace/measure in parallel on chunks
+4. Collecting results into Parquet/HDF5 files
+5. Cleaning up intermediate files
+
+Key functions:
+* interleaved_split_trace_and_measure() - Modern Parquet-based pipeline
+* write_video_as_chunked_tiffs() - Convert video to TIFF chunks
+* trace_chunked_tiffs() - Trace pre-written TIFF files
+"""
+
 import os
 import numpy as np
 import pandas as pd
@@ -6,9 +27,10 @@ import time
 import tempfile
 import shutil
 import re
+import itertools
 from wwutils import video
 import wwutils
-from .base import copy_parameters_files, setup_hdf5, write_chunk, trace_chunk, measure_chunk, trace_and_measure_chunk, append_whiskers_to_hdf5, append_whiskers_to_parquet, merge_parquet_files, process_and_write_zarr, consolidate_zarr_metadata, initialize_zarr, read_whisker_data, whisk_path
+from .base import copy_parameters_files, setup_hdf5, write_chunk, trace_chunk, measure_chunk, trace_and_measure_chunk, append_whiskers_to_hdf5, append_whiskers_to_parquet, merge_parquet_files, process_and_write_zarr, consolidate_zarr_metadata, initialize_zarr, read_whisker_data, whisk_path, extract_chunk_number, process_and_write_parquet
 from .io import ChunkedTiffWriter, FFmpegWriter
 
 def pipeline_trace(input_vfile, h5_filename,
@@ -401,6 +423,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     tif_full_filenames = [
         os.path.join(tiffs_to_trace_directory, 'chunk%s.tif' % fns)
         for fns in tif_file_number_strings]
+    
     tif_file_numbers = list(map(int, tif_file_number_strings))
     tif_ordering = np.argsort(tif_file_numbers)
     tif_sorted_filenames = np.array(tif_full_filenames)[
@@ -901,25 +924,6 @@ def compress_pf_to_video(input_reader, chunk_size=200, stop_after_frame=None,
 
 def measure_chunk_star(args):
     return measure_chunk(*args)
-
-def read_whiskers_hdf5_summary(filename):
-    """Reads and returns the `summary` table in an HDF5 file"""
-    with tables.open_file(filename) as fi:
-        # Check whether the summary table exists, or updated_summary
-        if '/summary' in fi:
-            summary = pd.DataFrame.from_records(fi.root.summary.read())
-        elif '/updated_summary' in fi:
-            try:
-                # Assuming a group
-                summary = pd.DataFrame.from_records(fi.root.updated_summary.read())
-            except:
-                # Then assuming a table
-                table_node = fi.get_node('/updated_summary/table')
-                summary = pd.DataFrame.from_records(table_node.read())
-        else:
-            raise ValueError("no summary table found")
-
-    return summary
 
 def read_whiskers_measurements(filenames):
     # Loads all the whiskers/measurements files and returns an aggregated dataframe

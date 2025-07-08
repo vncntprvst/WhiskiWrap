@@ -1,14 +1,20 @@
-"""Main functions for running input videos through trace.
+"""Core functions for whisker tracking and data processing.
 
-The overall algorithm is contained in `interleaved_reading_and_tracing`.
-* The input can be a video file or a directory of PF files.
-* Chunks of ~200 frames are read using ffmpeg, and then written to disk
-  as uncompressed tiff stacks.
-* Trace is called in parallel on each tiff stack
-* Additional chunks are read as trace completes.
-* At the end, all of the HDF5 files are stitched together.
+This module provides the fundamental functionality for WhiskiWrap:
+* Core data structures for whisker segments and measurements
+* HDF5, Parquet, and Zarr file I/O operations  
+* Low-level trace and measure operations
+* Data format conversion utilities
+* File management and parameter handling
 
-The previous function `pipeline_trace` is now deprecated.
+Key functions:
+* trace_chunk() - Run whisk trace on a single video chunk
+* measure_chunk() - Run whisk measure on traced whiskers
+* append_whiskers_to_hdf5() - Add whisker data to HDF5 files
+* append_whiskers_to_parquet() - Add whisker data to Parquet files
+* setup_hdf5() - Initialize HDF5 files for whisker data
+
+The main pipeline algorithms are in the pipeline module.
 """
 import sys
 try:
@@ -45,9 +51,9 @@ import logging
 
 # from . import wfile_io
 # from .mfile_io import MeasurementsTable
-# for debugging
-from WhiskiWrap import wfile_io
-from WhiskiWrap.mfile_io import MeasurementsTable
+# Import from relative modules within WhiskiWrap package
+from . import wfile_io
+from .mfile_io import MeasurementsTable
 
 # try:
 #     from whisk import trace
@@ -64,9 +70,11 @@ else:
         whisk_path += '/'
     print('WHISKPATH detected: ', whisk_path)
 
-import WhiskiWrap
+# Import external utilities
 from wwutils import video
 import wwutils
+
+from .io import PFReader, ChunkedTiffWriter, FFmpegReader, FFmpegWriter
 
 # Find the repo directory and the default param files
 # The banks don't differe with sensitive or default
@@ -75,9 +83,6 @@ PARAMETERS_FILE = os.path.join(DIRECTORY, 'default.parameters')
 SENSITIVE_PARAMETERS_FILE = os.path.join(DIRECTORY, 'sensitive.parameters')
 HALFSPACE_DB_FILE = os.path.join(DIRECTORY, 'halfspace.detectorbank')
 LINE_DB_FILE = os.path.join(DIRECTORY, 'line.detectorbank')
-
-# libpfDoubleRate library, needed for PFReader
-LIB_DOUBLERATE = os.path.join(DIRECTORY, 'libpfDoubleRate.so')
 
 def copy_parameters_files(target_directory, sensitive=False):
     """Copies in parameters and banks"""
@@ -1126,5 +1131,21 @@ def read_whisker_data(filename, output_format='dict'):
     elif output_format == 'df':
         return meas_table
 
-\nfrom .io import PFReader, ChunkedTiffWriter, FFmpegReader, FFmpegWriter
-from .pipeline import pipeline_trace, write_video_as_chunked_tiffs, trace_chunked_tiffs, interleaved_read_trace_and_measure, interleaved_split_trace_and_measure, interleaved_trace_and_measure, compress_pf_to_video, measure_chunk_star, read_whiskers_hdf5_summary, read_whiskers_measurements, stitch_h5_to_parquet
+def read_whiskers_hdf5_summary(filename):
+    """Reads and returns the `summary` table in an HDF5 file"""
+    with tables.open_file(filename) as fi:
+        # Check whether the summary table exists, or updated_summary
+        if '/summary' in fi:
+            summary = pd.DataFrame.from_records(fi.root.summary.read())
+        elif '/updated_summary' in fi:
+            try:
+                # Assuming a group
+                summary = pd.DataFrame.from_records(fi.root.updated_summary.read())
+            except:
+                # Then assuming a table
+                table_node = fi.get_node('/updated_summary/table')
+                summary = pd.DataFrame.from_records(table_node.read())
+        else:
+            raise ValueError("no summary table found")
+
+    return summary
