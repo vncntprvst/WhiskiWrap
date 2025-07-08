@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "WhiskiWrap"
 version = "1.2.5"
-description = "Whisk package wrapper created by cxrodgers"
+description = "Whisk package wrapper created by cxrodgers, maintained by vncntprvst"
 readme = "README.md"
 authors = [
     {name = "Chris Rodgers"},
