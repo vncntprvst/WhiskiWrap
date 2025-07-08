@@ -1602,7 +1602,7 @@ def gaussian_sum_smooth_pandas(data, evaluation_index, sigma,
 
 def load_bwid(*args, **kwargs):
     print("warning: replace wwutils.misc.load_bwid with wwutils.dataload.load_bwid")
-    return wwutils.dataload.load_bwid(*args, **kwargs)
+    return wwutils.load_data.load_bwid(*args, **kwargs)
     
 def stack_df_to_series(df):
     """Stack DataFrame until it becomes a series"""
