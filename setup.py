@@ -9,7 +9,7 @@ setup(
    packages=['WhiskiWrap','wwutils'],
    url='http://pypi.python.org/pypi/WhiskiWrap/',
    license='LICENSE.txt',
-   description='Whisk package wrapper created by cxrodgers, maintained by vncntprvst',
+   description='Whisk package wrapper created by Chris Rodgers, maintained by Vincent Prevosto',
    long_description=open('README.md').read(),
    long_description_content_type='text/markdown',
    install_requires=[
