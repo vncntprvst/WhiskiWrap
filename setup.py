@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.2.4',
+   version='1.2.5',
    authors='Chris Rodgers, Ariel Iporre, Vincent Prevosto',
    author_email='',
    maintainer=', '.join(['cxrodgers','aiporre','vncntprvst']),
