@@ -44,6 +44,9 @@ Pipeline Control:
     --skip-label        Skip automatic whisker labeling
     --skip-reclassify   Skip reclassification step
     --skip-plot         Skip overlay plot generation
+    --use-gnn           Use Graph Neural Network for whisker ID reassignment instead of reclassify
+    --gnn-model PATH    Path to pretrained GNN model file
+    --gnn-epochs N      Number of GNN training epochs (default: 100)
 
 Examples:
     # Run complete pipeline with bilateral tracking
@@ -60,6 +63,9 @@ Examples:
     
     # Run only labeling and visualization steps
     python whisker_tracking_pipeline.py video.mp4 --steps label,plot -b custom_name
+    
+    # Use Graph Neural Network for whisker ID reassignment
+    python whisker_tracking_pipeline.py video.mp4 --use-gnn --gnn-epochs 150
 
 Output Files:
     Single-side tracking (-s flag absent):
@@ -89,6 +95,7 @@ import gc
 import WhiskiWrap as ww
 # from wwutils.data_manip import load_data as ld
 import wwutils
+import pandas as pd
 wp = wwutils.whiskerpad
 cs = wwutils.combine_sides
 rc = wwutils.reclassify
@@ -332,6 +339,14 @@ For more information, see the documentation in the script header.
     parser.add_argument('--skip-plot', action='store_true', 
                        help='Skip overlay plot generation')
     
+    # GNN tracking options
+    parser.add_argument('--use-gnn', action='store_true',
+                       help='Use Graph Neural Network for whisker ID reassignment instead of reclassify')
+    parser.add_argument('--gnn-model', type=str,
+                       help='Path to pretrained GNN model file')
+    parser.add_argument('--gnn-epochs', type=int, default=100,
+                       help='Number of GNN training epochs (default: 100)')
+    
     # Version and help
     parser.add_argument('--version', action='version', version='WhiskiWrap Pipeline v2.0')
     
@@ -400,6 +415,21 @@ For more information, see the documentation in the script header.
             steps_to_run.remove('reclassify')
         if args.skip_plot:
             steps_to_run.remove('plot')
+    
+    # Use GNN instead of reclassify if requested
+    if args.use_gnn and 'reclassify' in steps_to_run:
+        steps_to_run[steps_to_run.index('reclassify')] = 'gnn_reclassify'
+    elif args.use_gnn:
+        # Add GNN step if not already present
+        if 'gnn_reclassify' not in steps_to_run:
+            # Insert after label step if present, otherwise after combine
+            if 'label' in steps_to_run:
+                insert_pos = steps_to_run.index('label') + 1
+            elif 'combine' in steps_to_run:
+                insert_pos = steps_to_run.index('combine') + 1
+            else:
+                insert_pos = len(steps_to_run)
+            steps_to_run.insert(insert_pos, 'gnn_reclassify')
     
     print(f"Pipeline steps to execute: {', '.join(steps_to_run)}")
     
@@ -584,6 +614,60 @@ For more information, see the documentation in the script header.
                         gc.collect()
                     else:
                         log_file.write("=== STEP 4: Cannot reclassify - missing output file ===\n")
+                        log_file.flush()
+                elif 'gnn_reclassify' in steps_to_run:
+                    if output_file and os.path.exists(output_file):
+                        log_file.write("=== STEP 4: GNN-based whisker ID reassignment ===\n")
+                        log_file.flush()
+                        step_start_time = time.time()
+                        
+                        try:
+                            # Import GNN module and dependencies
+                            from wwutils.classifiers.gnn_whisker_tracker import reassign_whisker_ids_gnn
+                            
+                            # Load data
+                            df = pd.read_parquet(output_file)
+                            
+                            # Reassign IDs using GNN approach
+                            log_file.write("Applying GNN-based whisker ID reassignment...\n")
+                            log_file.flush()
+                            
+                            # Call the main GNN reassignment function
+                            df_reassigned = reassign_whisker_ids_gnn(
+                                df, 
+                                model_path=args.gnn_model if args.gnn_model else None,
+                                n_epochs=args.gnn_epochs,
+                                temporal_window=10,
+                                train_split=0.8,
+                                verbose=True
+                            )
+                            
+                            # Save results
+                            gnn_output_file = output_file.replace(".parquet", "_gnn.parquet")
+                            df_reassigned.to_parquet(gnn_output_file, index=False)
+                            output_file = gnn_output_file
+                            
+                            # Update base name
+                            output_filename = os.path.basename(output_file)
+                            if '.' in output_filename:
+                                base_name = output_filename.rsplit('.', 1)[0]
+                            else:
+                                base_name = output_filename
+                                
+                            step_time = time.time() - step_start_time
+                            log_file.write(f'GNN whisker ID reassignment took {step_time:.2f} seconds.\n')
+                            log_file.write(f'Results saved to {gnn_output_file}\n')
+                            
+                        except ImportError as e:
+                            log_file.write(f'GNN dependencies not available: {e}\n')
+                            log_file.write('Install PyTorch and torch-geometric to use GNN tracking.\n')
+                        except Exception as e:
+                            log_file.write(f'GNN reassignment failed: {e}\n')
+                        
+                        log_file.flush()
+                        gc.collect()
+                    else:
+                        log_file.write("=== STEP 4: Cannot run GNN - missing output file ===\n")
                         log_file.flush()
                 else:
                     log_file.write("=== STEP 4: Skipping reclassification ===\n")

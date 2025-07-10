@@ -1,0 +1,7 @@
+# Additional requirements for GNN-based whisker tracking
+# Install with: pip install -r gnn_requirements.txt
+
+torch>=1.11.0
+torch-geometric>=2.0.0
+scikit-learn>=1.0.0
+matplotlib>=3.5.0
