@@ -623,7 +623,7 @@ For more information, see the documentation in the script header.
                         
                         try:
                             # Import GNN module and dependencies
-                            from wwutils.classifiers.gnn_whisker_tracker import reassign_whisker_ids_gnn
+                            from wwutils.classifiers.gnn_classifier import reassign_whisker_ids_gnn
                             
                             # Load data
                             df = pd.read_parquet(output_file)

@@ -62,7 +62,7 @@ def test_gnn_integration():
     try:
         # Test import
         print("Testing import...")
-        from wwutils.classifiers.gnn_whisker_tracker import reassign_whisker_ids_gnn
+        from wwutils.classifiers.gnn_classifier import reassign_whisker_ids_gnn
         print("✓ Import successful")
         
         # Test function call
