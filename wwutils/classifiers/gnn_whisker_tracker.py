@@ -10,6 +10,7 @@ import warnings
 from typing import Optional, List, Tuple, Dict, Any
 import numpy as np
 import pandas as pd
+import argparse
 
 # Check for optional dependencies
 try:
@@ -83,7 +84,7 @@ def extract_whisker_features(whisker_data: pd.DataFrame) -> np.ndarray:
 
 
 def build_whisker_graph(whisker_data: pd.DataFrame, 
-                       temporal_window: int = 10) -> List:
+                       temporal_window: int = 10) -> Tuple[List, Dict[int, int], Dict[int, int]]:
     """
     Build graph data for whisker tracking.
     
@@ -92,10 +93,15 @@ def build_whisker_graph(whisker_data: pd.DataFrame,
         temporal_window: Temporal context window
         
     Returns:
-        List of PyTorch Geometric Data objects
+        Tuple of (List of PyTorch Geometric Data objects, id_to_class mapping, class_to_id mapping)
     """
     if not TORCH_GEOMETRIC_AVAILABLE:
         raise ImportError("torch_geometric is required for graph construction")
+    
+    # Create mapping from whisker IDs to 0-based class indices
+    unique_wids = sorted(whisker_data['wid'].unique())
+    id_to_class = {wid: i for i, wid in enumerate(unique_wids)}
+    class_to_id = {i: wid for i, wid in enumerate(unique_wids)}
     
     graphs = []
     frames = sorted(whisker_data['fid'].unique())
@@ -154,14 +160,14 @@ def build_whisker_graph(whisker_data: pd.DataFrame,
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long)
         
-        # Create labels (whisker IDs)
-        y = torch.tensor(context_data['wid'].values, dtype=torch.long)
+        # Create labels (whisker IDs mapped to 0-based classes)
+        y = torch.tensor([id_to_class[wid] for wid in context_data['wid'].values], dtype=torch.long)
         
         # Create graph
         graph = Data(x=x, edge_index=edge_index, y=y)
         graphs.append(graph)
     
-    return graphs
+    return graphs, id_to_class, class_to_id
 
 
 if TORCH_GEOMETRIC_AVAILABLE:
@@ -269,7 +275,11 @@ if TORCH_AVAILABLE:
             processed_data = self._prepare_features(whisker_data)
             
             # Build graphs
-            graphs = build_whisker_graph(processed_data, self.temporal_window)
+            graphs, id_to_class, class_to_id = build_whisker_graph(processed_data, self.temporal_window)
+            
+            # Store the mappings
+            self.id_to_class = id_to_class
+            self.class_to_id = class_to_id
             
             if len(graphs) == 0:
                 raise ValueError("No graphs could be built from the data")
@@ -360,7 +370,7 @@ if TORCH_AVAILABLE:
             processed_data = self._prepare_features(whisker_data)
             
             # Build graphs
-            graphs = build_whisker_graph(processed_data, self.temporal_window)
+            graphs, _, _ = build_whisker_graph(processed_data, self.temporal_window)
             
             if len(graphs) == 0:
                 return processed_data['wid'].values
@@ -374,7 +384,9 @@ if TORCH_AVAILABLE:
                     graph = graph.to(self.device)
                     out = self.model(graph.x, graph.edge_index)
                     predictions = torch.argmax(out, dim=1)
-                    all_predictions.extend(predictions.cpu().numpy())
+                    # Map back to original whisker IDs
+                    mapped_predictions = [self.class_to_id[pred.item()] for pred in predictions]
+                    all_predictions.extend(mapped_predictions)
             
             return np.array(all_predictions)
         
@@ -388,7 +400,9 @@ if TORCH_AVAILABLE:
                 'scaler': self.scaler,
                 'n_whiskers': self.n_whiskers,
                 'temporal_window': self.temporal_window,
-                'input_dim': self.input_dim
+                'input_dim': self.input_dim,
+                'id_to_class': self.id_to_class,
+                'class_to_id': self.class_to_id
             }, filepath)
         
         def load_model(self, filepath: str):
@@ -399,6 +413,8 @@ if TORCH_AVAILABLE:
             self.temporal_window = checkpoint['temporal_window']
             self.input_dim = checkpoint['input_dim']
             self.scaler = checkpoint['scaler']
+            self.id_to_class = checkpoint.get('id_to_class', {})
+            self.class_to_id = checkpoint.get('class_to_id', {})
             
             self.model = WhiskerGCN(
                 input_dim=self.input_dim,
@@ -468,15 +484,32 @@ def reassign_whisker_ids_gnn(whisker_data: pd.DataFrame,
         # Predict new IDs
         new_ids = tracker.predict(whisker_data)
         
-        # Create output DataFrame
+        # Create output DataFrame and map predictions
         result_df = whisker_data.copy()
-        result_df['wid'] = new_ids
-        
-        if verbose:
-            changes = sum(whisker_data['wid'] != new_ids)
-            print(f"GNN ID reassignment completed. Changed {changes} IDs.")
-        
-        return result_df
+        try:
+            # Handle 1D array directly if lengths match
+            if isinstance(new_ids, np.ndarray) and new_ids.ndim == 1:
+                if new_ids.size == result_df.shape[0]:
+                    result_df['wid'] = new_ids
+                else:
+                    raise ValueError(f"new_ids length {new_ids.size} != rows {result_df.shape[0]}")
+            else:
+                # 2D mapping per frame
+                frames = sorted(whisker_data['fid'].unique())
+                for i, frame in enumerate(frames):
+                    if i < len(new_ids):
+                        mask = result_df['fid'] == frame
+                        frame_rows = result_df[mask].sort_values('wid')
+                        for j, (idx, _) in enumerate(frame_rows.iterrows()):
+                            if j < len(new_ids[i]):
+                                result_df.at[idx, 'wid'] = new_ids[i][j]
+            if verbose:
+                diff = (whisker_data['wid'] != result_df['wid']).sum()
+                print(f"GNN ID reassignment completed. Changed {diff} IDs.")
+            return result_df
+        except Exception as e:
+            warnings.warn(f"Mapping GNN results failed: {e}. Using fallback method.")
+            return _fallback_reassignment(whisker_data, temporal_window, verbose)
         
     except Exception as e:
         warnings.warn(f"GNN reassignment failed: {e}. Using fallback method.")
@@ -495,121 +528,69 @@ def _fallback_reassignment(whisker_data: pd.DataFrame,
     if verbose:
         print("Using fallback ID reassignment based on spatial consistency...")
     
-    df = whisker_data.copy()
-    
-    # Sort by frame and face side
-    df = df.sort_values(['fid', 'face_side', 'follicle_x', 'follicle_y'])
-    
-    # Group by face side to handle each side separately
-    result_dfs = []
-    
-    for face_side in df['face_side'].unique():
-        side_df = df[df['face_side'] == face_side].copy()
-        
-        # Get unique frames
-        frames = sorted(side_df['fid'].unique())
-        
-        # Track whiskers across frames using distance-based approach
-        for i, frame in enumerate(frames):
-            if i == 0:
-                continue  # Skip first frame
-            
-            curr_frame = side_df[side_df['fid'] == frame]
-            prev_frame = side_df[side_df['fid'] == frames[i-1]]
-            
-            if len(curr_frame) == 0 or len(prev_frame) == 0:
+    # In-place fallback using spatial consistency
+    result_df = whisker_data.copy()
+    # Process each face side separately
+    for face_side in result_df['face_side'].unique():
+        mask_side = result_df['face_side'] == face_side
+        frames = sorted(result_df.loc[mask_side, 'fid'].unique())
+        for i in range(1, len(frames)):
+            prev_f = frames[i-1]
+            curr_f = frames[i]
+            mask_prev = mask_side & (result_df['fid'] == prev_f)
+            mask_curr = mask_side & (result_df['fid'] == curr_f)
+            prev_rows = result_df.loc[mask_prev]
+            curr_rows = result_df.loc[mask_curr]
+            if prev_rows.empty or curr_rows.empty:
                 continue
-            
-            # Calculate distance matrix between current and previous frame whiskers
-            distances = []
-            for _, curr_whisker in curr_frame.iterrows():
-                row_distances = []
-                for _, prev_whisker in prev_frame.iterrows():
-                    # Use Euclidean distance based on follicle position
-                    dist = np.sqrt(
-                        (curr_whisker['follicle_x'] - prev_whisker['follicle_x'])**2 +
-                        (curr_whisker['follicle_y'] - prev_whisker['follicle_y'])**2
-                    )
-                    row_distances.append(dist)
-                distances.append(row_distances)
-            
-            if len(distances) > 0 and len(distances[0]) > 0:
-                distances = np.array(distances)
-                
-                # Simple greedy assignment (not optimal but works for fallback)
-                used_prev = set()
-                new_ids = []
-                
-                for curr_idx in range(len(curr_frame)):
-                    # Find closest previous whisker that hasn't been used
-                    min_dist = float('inf')
-                    best_prev_idx = -1
-                    
-                    for prev_idx in range(len(prev_frame)):
-                        if prev_idx not in used_prev and distances[curr_idx][prev_idx] < min_dist:
-                            min_dist = distances[curr_idx][prev_idx]
-                            best_prev_idx = prev_idx
-                    
-                    if best_prev_idx != -1:
-                        used_prev.add(best_prev_idx)
-                        prev_wid = prev_frame.iloc[best_prev_idx]['wid']
-                        new_ids.append(prev_wid)
-                    else:
-                        # No good match found, keep original ID
-                        new_ids.append(curr_frame.iloc[curr_idx]['wid'])
-                
-                # Update IDs in the dataframe
-                curr_indices = curr_frame.index
-                for idx, new_id in zip(curr_indices, new_ids):
-                    side_df.loc[idx, 'wid'] = new_id
-        
-        result_dfs.append(side_df)
-    
-    # Combine results
-    result_df = pd.concat(result_dfs, ignore_index=True)
-    result_df = result_df.sort_values(['fid', 'face_side', 'wid'])
-    
+            # Positions
+            prev_pos = prev_rows[['follicle_x','follicle_y']].values
+            curr_pos = curr_rows[['follicle_x','follicle_y']].values
+            # Distance matrix
+            dists = np.linalg.norm(curr_pos[:, None, :] - prev_pos[None, :, :], axis=2)
+            # Greedy assignment
+            used = set()
+            new_ids = []
+            for j in range(dists.shape[0]):
+                # choose nearest unused
+                choices = [(d, idx) for idx, d in enumerate(dists[j]) if idx not in used]
+                if choices:
+                    _, best = min(choices)
+                    used.add(best)
+                    new_ids.append(prev_rows.iloc[best]['wid'])
+                else:
+                    new_ids.append(curr_rows.iloc[j]['wid'])
+            # Assign new IDs
+            for idx, wid in zip(curr_rows.index, new_ids):
+                result_df.at[idx, 'wid'] = wid
     if verbose:
-        changes = sum(whisker_data['wid'] != result_df['wid'])
-        print(f"Fallback ID reassignment completed. Changed {changes} IDs.")
-    
+        print("Fallback ID reassignment completed.")
     return result_df
 
 
 if __name__ == "__main__":
-    # Example usage
-    print("GNN Whisker Tracker Example")
-    print("==========================")
+
+    print("GNN Whisker Classifier")
+    print("======================")
     
     if not TORCH_AVAILABLE:
         print("PyTorch not available. Please install PyTorch to use GNN-based tracking.")
         exit(1)
     
-    # Create sample data
-    np.random.seed(42)
-    frames = range(100)
-    n_whiskers = 5
-    
-    data = []
-    for frame in frames:
-        for whisker_id in range(n_whiskers):
-            data.append({
-                'fid': frame,
-                'wid': whisker_id,
-                'angle': np.random.uniform(0, 2*np.pi),
-                'curvature': np.random.uniform(0, 1),
-                'length': np.random.uniform(10, 100),
-                'follicle_x': np.random.uniform(0, 640),
-                'follicle_y': np.random.uniform(0, 480),
-                'face_side': 'left' if np.random.rand() > 0.5 else 'right'
-            })
-    
-    whisker_data = pd.DataFrame(data)
-    
-    # Test GNN tracker
-    print("Testing GNN-based whisker ID reassignment...")
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Reclassify whisker tracking data")
+    parser.add_argument("file_path", type=str, help="Path to the input Parquet file")
+    # parser.add_argument("protraction_direction", type=str, help="Path to the whiskerpad JSON file, or the protraction direction itself")
+    parser.add_argument("--plot", action="store_true", help="Plot the whisker traces before and after reclassification")
+    args = parser.parse_args()
+
+    whisker_data = pd.read_parquet(args.file_path)
+
+    # Run GNN tracker
+    print(f"Running GNN-based whisker ID reassignment on {args.file_path}")
     result_df = reassign_whisker_ids_gnn(whisker_data, n_epochs=20, verbose=True)
     
-    print(f"Original data shape: {whisker_data.shape}")
-    print(f"Result data shape: {result_df.shape}")
-    print("GNN Whisker Tracker test completed successfully!")
+    if result_df is None:
+        print("GNN reassignment failed. Using fallback method.")
+    else:
+        print("GNN Whisker Tracker test completed successfully!")

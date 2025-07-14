@@ -45,13 +45,13 @@ Process already-tracked whisker data:
 
 ```bash
 # Basic usage
-python wwutils/classifiers/gnn_whisker_tracker.py combined_data.parquet
+python wwutils/classifiers/gnn_whisker_tracker.py test_videos/excerpt_video_updated_edited.parquet
 
 # Save trained model for reuse
-python wwutils/classifiers/gnn_whisker_tracker.py combined_data.parquet --save-model my_gnn.pt
+python wwutils/classifiers/gnn_whisker_tracker.py test_videos/excerpt_video_updated_edited.parquet --save-model my_gnn.pt
 
 # Use custom parameters
-python wwutils/classifiers/gnn_whisker_tracker.py combined_data.parquet \
+python wwutils/classifiers/gnn_whisker_tracker.py test_videos/excerpt_video_updated_edited.parquet \
     --epochs 200 --lr 0.0005 --hidden-dim 128 --max-spatial-distance 75
 ```
 
