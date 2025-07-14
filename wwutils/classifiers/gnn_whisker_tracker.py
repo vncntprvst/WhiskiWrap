@@ -355,13 +355,13 @@ if TORCH_AVAILABLE:
         
         def predict(self, whisker_data: pd.DataFrame) -> np.ndarray:
             """
-            Predict whisker IDs.
+            Predict whisker IDs for each frame.
             
             Args:
                 whisker_data: Input data
                 
             Returns:
-                Predicted whisker IDs
+                Predicted whisker IDs matching original data order
             """
             if self.model is None:
                 raise ValueError("Model not trained or loaded")
@@ -375,20 +375,53 @@ if TORCH_AVAILABLE:
             if len(graphs) == 0:
                 return processed_data['wid'].values
             
-            # Make predictions
-            self.model.eval()
-            all_predictions = []
+            # Create mapping from frame to predictions
+            frames = sorted(whisker_data['fid'].unique())
+            frame_predictions = {}
             
+            self.model.eval()
             with torch.no_grad():
-                for graph in graphs:
+                for i, graph in enumerate(graphs):
+                    if i >= len(frames):
+                        break
+                        
                     graph = graph.to(self.device)
                     out = self.model(graph.x, graph.edge_index)
                     predictions = torch.argmax(out, dim=1)
-                    # Map back to original whisker IDs
-                    mapped_predictions = [self.class_to_id[pred.item()] for pred in predictions]
-                    all_predictions.extend(mapped_predictions)
+                    
+                    # Get the target frame (center of temporal window)
+                    target_frame = frames[i]
+                    
+                    # Get data for this specific frame from the graph
+                    frame_data = whisker_data[whisker_data['fid'] == target_frame]
+                    
+                    # Map predictions back to original whisker IDs
+                    # We need to match the graph node order with the frame data order
+                    if len(predictions) >= len(frame_data):
+                        # Take the first predictions corresponding to this frame
+                        frame_preds = predictions[:len(frame_data)]
+                        mapped_preds = [self.class_to_id[pred.item()] for pred in frame_preds]
+                        frame_predictions[target_frame] = mapped_preds
+                    else:
+                        # Fallback to original IDs if prediction count mismatch
+                        frame_predictions[target_frame] = frame_data['wid'].tolist()
             
-            return np.array(all_predictions)
+            # Reconstruct predictions in original data order
+            result_predictions = []
+            for _, row in whisker_data.iterrows():
+                frame_id = row['fid']
+                if frame_id in frame_predictions:
+                    # Get prediction for this whisker in this frame
+                    frame_data = whisker_data[whisker_data['fid'] == frame_id]
+                    whisker_idx = frame_data.index.get_loc(row.name)
+                    if whisker_idx < len(frame_predictions[frame_id]):
+                        result_predictions.append(frame_predictions[frame_id][whisker_idx])
+                    else:
+                        result_predictions.append(row['wid'])
+                else:
+                    result_predictions.append(row['wid'])
+            
+            return np.array(result_predictions)
         
         def save_model(self, filepath: str):
             """Save the trained model."""
@@ -435,7 +468,7 @@ def reassign_whisker_ids_gnn(whisker_data: pd.DataFrame,
                              n_epochs: int = 100,
                              temporal_window: int = 10,
                              train_split: float = 0.8,
-                             verbose: bool = True) -> pd.DataFrame:
+                             verbose: bool = True) -> Tuple[pd.DataFrame, bool]:
     """
     Reassign whisker IDs using GNN approach with fallback for missing dependencies.
     
@@ -448,14 +481,14 @@ def reassign_whisker_ids_gnn(whisker_data: pd.DataFrame,
         verbose: Whether to print progress
         
     Returns:
-        DataFrame with reassigned whisker IDs
+        Tuple of (DataFrame with reassigned whisker IDs, whether GNN was used)
     """
     if not TORCH_AVAILABLE or not TORCH_GEOMETRIC_AVAILABLE:
         warnings.warn(
             "PyTorch and/or torch_geometric not available. "
             "Using fallback ID reassignment based on spatial consistency."
         )
-        return _fallback_reassignment(whisker_data, temporal_window, verbose)
+        return _fallback_reassignment(whisker_data, temporal_window, verbose), False
     
     # Check if sklearn is available for preprocessing
     if not SKLEARN_AVAILABLE:
@@ -475,7 +508,7 @@ def reassign_whisker_ids_gnn(whisker_data: pd.DataFrame,
         if model_path is None or not os.path.exists(model_path):
             if verbose:
                 print("Training new GNN model...")
-            tracker.train(whisker_data, n_epochs=n_epochs, train_split=train_split)
+            tracker.train(whisker_data, n_epochs=n_epochs, train_split=train_split, verbose=verbose)
         else:
             if verbose:
                 print(f"Loading pretrained model from {model_path}")
@@ -486,34 +519,17 @@ def reassign_whisker_ids_gnn(whisker_data: pd.DataFrame,
         
         # Create output DataFrame and map predictions
         result_df = whisker_data.copy()
-        try:
-            # Handle 1D array directly if lengths match
-            if isinstance(new_ids, np.ndarray) and new_ids.ndim == 1:
-                if new_ids.size == result_df.shape[0]:
-                    result_df['wid'] = new_ids
-                else:
-                    raise ValueError(f"new_ids length {new_ids.size} != rows {result_df.shape[0]}")
-            else:
-                # 2D mapping per frame
-                frames = sorted(whisker_data['fid'].unique())
-                for i, frame in enumerate(frames):
-                    if i < len(new_ids):
-                        mask = result_df['fid'] == frame
-                        frame_rows = result_df[mask].sort_values('wid')
-                        for j, (idx, _) in enumerate(frame_rows.iterrows()):
-                            if j < len(new_ids[i]):
-                                result_df.at[idx, 'wid'] = new_ids[i][j]
-            if verbose:
-                diff = (whisker_data['wid'] != result_df['wid']).sum()
-                print(f"GNN ID reassignment completed. Changed {diff} IDs.")
-            return result_df
-        except Exception as e:
-            warnings.warn(f"Mapping GNN results failed: {e}. Using fallback method.")
-            return _fallback_reassignment(whisker_data, temporal_window, verbose)
+        result_df['wid'] = new_ids
+        
+        if verbose:
+            diff = (whisker_data['wid'] != result_df['wid']).sum()
+            print(f"GNN ID reassignment completed. Changed {diff} IDs.")
+        
+        return result_df, True
         
     except Exception as e:
         warnings.warn(f"GNN reassignment failed: {e}. Using fallback method.")
-        return _fallback_reassignment(whisker_data, temporal_window, verbose)
+        return _fallback_reassignment(whisker_data, temporal_window, verbose), False
 
 
 def _fallback_reassignment(whisker_data: pd.DataFrame, 
@@ -588,9 +604,13 @@ if __name__ == "__main__":
 
     # Run GNN tracker
     print(f"Running GNN-based whisker ID reassignment on {args.file_path}")
-    result_df = reassign_whisker_ids_gnn(whisker_data, n_epochs=20, verbose=True)
+    result_df, used_gnn = reassign_whisker_ids_gnn(whisker_data, n_epochs=20, verbose=True)
     
     if result_df is None:
-        print("GNN reassignment failed. Using fallback method.")
+        print("ERROR: Whisker ID reassignment failed completely.")
+        exit(1)
+    elif used_gnn:
+        print("SUCCESS: GNN-based whisker ID reassignment completed successfully!")
     else:
-        print("GNN Whisker Tracker test completed successfully!")
+        print("SUCCESS: Fallback spatial consistency reassignment completed successfully!")
+        print("Note: GNN method failed, so fallback method was used instead.")
