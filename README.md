@@ -7,7 +7,9 @@ The goal is to improve whisk in the following ways:
 
 1. Make it more flexible about reading various input files. In my experience whisk has trouble reading certain input videos. Instead, WhiskiWrap uses your system's ffmpeg to read input files (because ffmpeg can typically read almost anything) and to generate simple tiff stacks which whisk can reliably read.
 2. Make it faster, by calling many instances of `trace` in parallel on non-overlapping chunks of the input video.
-3. Make it more cross-platform and memory-efficient, by converting whisk's output files into HDF5 files which can be read by multiple programs (Python, Matlab) on any operating system. Importantly, HDF5 files can also be read partially to avoid overflowing your system's memory.
+3. Make it more cross-platform and memory-efficient, by converting whisk's output files into Parquet or HDF5 files which can be read by multiple programs (Python, Matlab) on any operating system. Importantly, Parquet and HDF5 files can also be read partially to avoid overflowing your system's memory.
+
+WhiskiWrap was originally developed by [Chris Rodgers](https://github.com/cxrodgers/WhiskiWrap). Whisk was developed by [Nathan Clack](https://github.com/nclack/whisk).
 
 ## Quick Start
 
@@ -16,8 +18,7 @@ WhiskiWrap ships with two convenience scripts located in the project root:
 1. **`trace_whiskers.py`** – minimal interface for tracing a single video and
    producing a Parquet or HDF5 file.
 2. **`whisker_tracking_pipeline.py`** – full pipeline running tracing, combining
-   bilateral data and assigning whisker IDs with U-Net, classic reclassification
-   or a GNN classifier.
+   bilateral data (optional), refining whisker IDs (several reclassification methods available), and plotting results.
 
 ### Basic usage
 
