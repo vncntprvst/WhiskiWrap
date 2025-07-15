@@ -1,4 +1,16 @@
-"""Train a GNN model for whisker ID reassignment."""
+"""Train a GNN model for whisker ID reassignment.
+
+Inputs:
+    * Parquet file with whisker tracking data
+    * --output: Output path for the trained model
+    * --epochs: Number of training epochs
+    * --train-split: Training split ratio
+    * --temporal-window: Temporal window size
+
+Usage:
+    python train_gnn.py <parquet_file> [--output <model_output_path>]
+
+"""
 
 from __future__ import annotations
 
@@ -6,9 +18,16 @@ import os
 import argparse
 import pandas as pd
 
-from .gnn_classifier import GNNWhiskerTracker
-
-
+# Try absolute import first, fall back to relative if running as module
+try:
+    from wwutils.classifiers.gnn_classifier import GNNWhiskerTracker
+except ImportError:
+    try:
+        from .gnn_classifier import GNNWhiskerTracker
+    except ImportError:
+        print("Error: Could not import GNNWhiskerTracker. Make sure you're running from the project root.")
+        exit(1)
+        
 def train(args: argparse.Namespace) -> None:
     df = pd.read_parquet(args.parquet)
     tracker = GNNWhiskerTracker(n_whiskers=df["wid"].nunique(), temporal_window=args.temporal_window)

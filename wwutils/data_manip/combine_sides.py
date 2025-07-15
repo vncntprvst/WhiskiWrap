@@ -413,9 +413,30 @@ def combine_to_file(wt_files, whiskerpad_file, output_file=None, keep_wt_files=F
 
 def filter_whiskers_by_length(df, threshold_factor=0.5):
     """Filter out whiskers that are shorter than 1/2 of the mean median length."""
-    # Calculate median length per whisker ID (wid)
-    median_length = df.groupby('wid')['length'].median().reset_index(name='median_length')
+
+    # First, calculate frequency of each whisker ID per face_side across all frames
+    num_needed = df['wid'].nunique()
+    sorted_ids = df['wid'].value_counts().nlargest(num_needed).index.tolist()
+    # Consider only wids that appear in > 80% of frames
+    min_frequency = 0.8 * df['fid'].nunique()
+    valid_wids = [wid for wid in sorted_ids if df['wid'].value_counts().get(wid, 0) >= min_frequency]
+
+    if not valid_wids or len(valid_wids) < 2:
+        logging.warning("Not enough valid whisker IDs found for filtering.")
+        return df
     
+    # Calculate median length per whisker ID (wid), for valid whiskers only
+    # Keep only the top 6.
+    top_wids = valid_wids[:6] if len(valid_wids) > 6 else valid_wids
+    valid_wids_set = set(top_wids)
+    filtered_df = df[df['wid'].isin(valid_wids_set)]
+    # Use numpy for median calculation for speed if DataFrame is large
+    median_length = (
+        filtered_df.groupby('wid', sort=False)['length']
+        .median()
+        .reset_index(name='median_length')
+    )
+
     # Set threshold as ratio of the mean of median lengths (default: 0.5)
     length_threshold = median_length['median_length'].mean() * threshold_factor
     
@@ -448,6 +469,30 @@ def determine_head_orientation(face_side_value):
         # Default fallback
         return 'vertical'
 
+def compute_frequency(df, per_face_side=False):
+    """Compute frequency of whisker IDs"""
+
+    frequency_per_face_side = {}
+
+    if per_face_side:
+        for face_side in df['face_side'].unique():
+            face_side_data = df[df['face_side'] == face_side]
+            id_counts = face_side_data['label'].value_counts() if 'label' in df.columns else face_side_data['wid'].value_counts()
+            # Sort IDs by frequency (descending), then by ID value for ties
+            sorted_ids = id_counts.sort_values(ascending=False).index.tolist()
+            frequency_per_face_side[face_side] = sorted_ids
+            logging.info(f"Face side '{face_side}' - IDs by frequency: {sorted_ids}")
+
+        return frequency_per_face_side
+    
+    else:
+        # Compute frequency across all frames without face_side distinction
+        id_counts = df['label'].value_counts() if 'label' in df.columns else df['wid'].value_counts()
+        sorted_ids = id_counts.sort_values(ascending=False).index.tolist()
+        logging.info(f"All frames - IDs by frequency: {sorted_ids}")
+
+        return sorted_ids
+
 def auto_assign_by_frequency(df):
     """Automatically reassign whisker IDs based on frequency and antero-posterior axis."""
     if 'face_side' not in df.columns:
@@ -457,15 +502,8 @@ def auto_assign_by_frequency(df):
     logging.info("Auto-assigning whisker IDs based on frequency and antero-posterior axis...")
     
     # First, calculate frequency of each ID per face_side across all frames
-    frequency_per_face_side = {}
-    for face_side in df['face_side'].unique():
-        face_side_data = df[df['face_side'] == face_side]
-        id_counts = face_side_data['label'].value_counts() if 'label' in df.columns else face_side_data['wid'].value_counts()
-        # Sort IDs by frequency (descending), then by ID value for ties
-        sorted_ids = id_counts.sort_values(ascending=False).index.tolist()
-        frequency_per_face_side[face_side] = sorted_ids
-        logging.info(f"Face side '{face_side}' - IDs by frequency: {sorted_ids}")
-    
+    frequency_per_face_side = compute_frequency(df, per_face_side=True)
+
     # Now assign IDs for each frame and face_side
     for (fid, face_side), group in df.groupby(['fid', 'face_side']):
         if len(group) == 0:
@@ -492,11 +530,11 @@ def auto_assign_by_frequency(df):
         
         if orientation == 'horizontal':
             # Sort by x-axis (follicle_x) for top/bottom face sides
-            sorted_indices = group.sort_values('follicle_x').index
+            sorted_indices = group.sort_values('follicle_x', ascending=True).index
         else:
             # Sort by y-axis (follicle_y) for left/right face sides
-            sorted_indices = group.sort_values('follicle_y').index
-        
+            sorted_indices = group.sort_values('follicle_y', ascending=False).index
+
         # Assign frequency-based IDs in spatial order
         for i, idx in enumerate(sorted_indices):
             if i < len(assigned_ids):

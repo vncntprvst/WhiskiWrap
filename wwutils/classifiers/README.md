@@ -3,11 +3,11 @@
 This folder contains optional modules for assigning whisker IDs after the
 tracking step. Three approaches are provided:
 
-- `reclassify.py` – heuristic reassignment based on the whisker pad location.
+- `reclassify.py` – heuristic reassignment based on the whisker features.
 - `unet_classifier.py` – apply a pre-trained U-Net segmentation model to each
   frame. Requires PyTorch and a trained model file.
 - `gnn_classifier.py` – Graph Neural Network approach that can train on the
-  tracking data itself if no model is supplied.
+  tracking data itself if no model is supplied. Requires Pytorch.
 
 Utility scripts:
 
