@@ -4,9 +4,8 @@ whisker_tracking_pipeline.py - Complete pipeline for automated whisker tracking 
 This script provides a comprehensive end-to-end pipeline for whisker tracking that includes:
     1. Whisker tracing and measurement from video input
     2. Combining bilateral (left/right) whisker data  
-    3. Automatic whisker labeling with U-Net classifier
-    4. Reclassification fallback for improved accuracy
-    5. Overlay plot generation for visualization
+    3. Whisker ID assignment using U-Net, classic reclassification, or GNN
+    4. Overlay plot generation for visualization
 
 The pipeline can be run in full automation mode or with fine-grained control over
 which steps to execute, making it suitable for both complete analysis workflows
@@ -37,14 +36,14 @@ Core Options:
     
 Pipeline Control:
     --steps             Comma-separated list of pipeline steps to execute.
-                        Available: trace, combine, label, reclassify, plot
+                        Available: trace, combine, label, reclassify, gnn, plot
                         (default: all steps in sequence)
     --skip-trace        Skip whisker tracing (assumes trace files exist)
     --skip-combine      Skip combining bilateral data
     --skip-label        Skip automatic whisker labeling
     --skip-reclassify   Skip reclassification step
     --skip-plot         Skip overlay plot generation
-    --use-gnn           Use Graph Neural Network for whisker ID reassignment instead of reclassify
+    --use-gnn           Use Graph Neural Network for whisker ID assignment (default)
     --gnn-model PATH    Path to pretrained GNN model file
     --gnn-epochs N      Number of GNN training epochs (default: 100)
 
@@ -64,7 +63,7 @@ Examples:
     # Run only labeling and visualization steps
     python whisker_tracking_pipeline.py video.mp4 --steps label,plot -b custom_name
     
-    # Use Graph Neural Network for whisker ID reassignment
+    # Use Graph Neural Network for whisker ID assignment
     python whisker_tracking_pipeline.py video.mp4 --use-gnn --gnn-epochs 150
 
 Output Files:
@@ -101,6 +100,20 @@ cs = wwutils.combine_sides
 rc = wwutils.reclassify
 uc = wwutils.unet_classifier
 po = wwutils.plot_overlay
+
+def create_whiskerpad(input_file, base_name, log_file):
+    """Create or load whiskerpad parameters (mostly used for bilateral tracking)"""
+    whiskerpad_file = os.path.join(os.path.dirname(input_file), f'whiskerpad_{base_name}.json')
+
+    log_file.write(f"Creating whiskerpad parameters file {whiskerpad_file}\n")
+
+    # Get whiskerpad parameters
+    whiskerpad = wp.Params(input_file, splitUp, base_name)
+    whiskerpad_params, splitUp = wp.WhiskerPad.get_whiskerpad_params(whiskerpad)
+    # Save whisking parameters to json file
+    wp.WhiskerPad.save_whiskerpad_params(whiskerpad, whiskerpad_params)
+
+    return whiskerpad_params, splitUp
 
 def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
     """
@@ -150,14 +163,7 @@ def trace_measure(input_file, base_name, output_dir, nproc, splitUp, log_file):
         whiskerpad_file = os.path.join(input_dir, f'whiskerpad_{base_name}.json')
         
         if not os.path.exists(whiskerpad_file):
-            # If whiskerpad file does not exist, create it
-            log_file.write(f"Creating whiskerpad parameters file {whiskerpad_file}\n")
-            log_file.flush()
-            whiskerpad = wp.Params(input_file, splitUp, base_name)
-            # Get whiskerpad parameters
-            whiskerpadParams, splitUp = wp.WhiskerPad.get_whiskerpad_params(whiskerpad)
-            # Save whisking parameters to json file
-            wp.WhiskerPad.save_whiskerpad_params(whiskerpad, whiskerpadParams)
+            create_whiskerpad(input_file, base_name, log_file)
 
         with open(whiskerpad_file, 'r') as f:
             whiskerpad_params = json.load(f)
@@ -332,21 +338,19 @@ For more information, see the documentation in the script header.
                        help='Skip whisker tracing (assumes trace files exist)')
     parser.add_argument('--skip-combine', action='store_true', 
                        help='Skip combining bilateral data')
-    parser.add_argument('--skip-label', action='store_true', 
-                       help='Skip automatic whisker labeling')
     parser.add_argument('--skip-reclassify', action='store_true', 
                        help='Skip reclassification step')
     parser.add_argument('--skip-plot', action='store_true', 
                        help='Skip overlay plot generation')
     
-    # GNN tracking options
-    parser.add_argument('--use-gnn', action='store_true',
-                       help='Use Graph Neural Network for whisker ID reassignment instead of reclassify')
-    parser.add_argument('--gnn-model', type=str,
-                       help='Path to pretrained GNN model file')
-    parser.add_argument('--gnn-epochs', type=int, default=100,
-                       help='Number of GNN training epochs (default: 100)')
-    
+    # Classifier options
+    parser.add_argument('--classifier', type=str, choices=['features', 'unet', 'gnn'], default='gnn',
+                       help='Classifier to use for whisker ID assignment (default: gnn)')
+    parser.add_argument('--model', type=str,
+                       help='Path to pretrained model file, if applicable')
+    parser.add_argument('--epochs', type=int, default=100,
+                       help='Number of training epochs (default: 100)')
+
     # Version and help
     parser.add_argument('--version', action='version', version='WhiskiWrap Pipeline v2.0')
     
@@ -390,75 +394,58 @@ For more information, see the documentation in the script header.
         sys.exit(1)
 
     # Determine which pipeline steps to execute
-    all_steps = ['trace', 'combine', 'label', 'reclassify', 'plot']
-    
+    valid_steps = ['trace', 'combine', 'reclassify', 'plot']
+    default_steps = ['trace', 'combine', 'reclassify', 'plot']
+
     if args.steps:
         # User specified specific steps
         requested_steps = [step.strip() for step in args.steps.split(',')]
         # Validate step names
-        invalid_steps = [step for step in requested_steps if step not in all_steps]
+        invalid_steps = [step for step in requested_steps if step not in valid_steps]
         if invalid_steps:
             print(f"Error: Invalid step(s): {', '.join(invalid_steps)}")
-            print(f"Valid steps are: {', '.join(all_steps)}")
+            print(f"Valid steps are: {', '.join(valid_steps)}")
             sys.exit(1)
         steps_to_run = requested_steps
     else:
         # Default: run all steps, but respect skip flags
-        steps_to_run = all_steps.copy()
+        steps_to_run = default_steps.copy()
         if args.skip_trace:
             steps_to_run.remove('trace')
         if args.skip_combine:
             steps_to_run.remove('combine')
-        if args.skip_label:
-            steps_to_run.remove('label')
         if args.skip_reclassify:
             steps_to_run.remove('reclassify')
         if args.skip_plot:
             steps_to_run.remove('plot')
-    
-    # Use GNN instead of reclassify if requested
-    if args.use_gnn and 'reclassify' in steps_to_run:
-        steps_to_run[steps_to_run.index('reclassify')] = 'gnn_reclassify'
-    elif args.use_gnn:
-        # Add GNN step if not already present
-        if 'gnn_reclassify' not in steps_to_run:
-            # Insert after label step if present, otherwise after combine
-            if 'label' in steps_to_run:
-                insert_pos = steps_to_run.index('label') + 1
-            elif 'combine' in steps_to_run:
-                insert_pos = steps_to_run.index('combine') + 1
-            else:
-                insert_pos = len(steps_to_run)
-            steps_to_run.insert(insert_pos, 'gnn_reclassify')
     
     print(f"Pipeline steps to execute: {', '.join(steps_to_run)}")
     
     # Validate dependencies
     if 'combine' in steps_to_run and 'trace' not in steps_to_run:
         # Check if trace files exist
-        if splitUp:
-            expected_trace_files = [
-                os.path.join(os.path.dirname(input_file), f'{base_name}_left.parquet'),
-                os.path.join(os.path.dirname(input_file), f'{base_name}_right.parquet')
-            ]
-        else:
-            expected_trace_files = [
-                os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
-            ]
+        # suffix can left / right or top / bottom depending on orientation of video
+        whiskerpad_params = create_whiskerpad(input_file, base_name, sys.stdout)
+        split_dir = whiskerpad_params['whiskerpads'][0]['FaceAxis']
+        suffixes = ['left', 'right'] if split_dir == 'vertical' else ['top', 'bottom']
+        expected_trace_files = [
+            os.path.join(os.path.dirname(input_file), f'{base_name}_{suffix}.parquet')
+            for suffix in suffixes
+        ]
         missing_files = [f for f in expected_trace_files if not os.path.exists(f)]
         if missing_files:
             print(f"Warning: Combine step requested but trace files missing: {missing_files}")
             print("Consider running trace step first or using --skip-combine")
-    
-    if any(step in steps_to_run for step in ['label', 'reclassify', 'plot']) and 'combine' not in steps_to_run:
-        # Check if combined file exists
-        if splitUp:
-            expected_combined_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
+
+    if 'reclassify' in steps_to_run and 'trace' not in steps_to_run:
+        if splitUp and 'combine' not in steps_to_run:
+                # Check if combined file exists
+                expected_parquet_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
         else:
-            expected_combined_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
-        if not os.path.exists(expected_combined_file):
-            print(f"Warning: Analysis steps requested but file missing: {expected_combined_file}")
-            print("Consider running combine step first or using appropriate skip flags")
+            expected_parquet_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+        if not os.path.exists(expected_parquet_file):
+            print(f"Warning: Analysis steps requested but file missing: {expected_parquet_file}")
+            print("Consider running trace or combine step first or using appropriate skip flags")
 
     # Set up logging with error handling
     log_file_path = os.path.join(os.path.dirname(input_file), f'whisker_tracking_{base_name}_log.txt')
@@ -484,7 +471,7 @@ For more information, see the documentation in the script header.
             # Initialize variables for pipeline steps
             output_filenames = None
             whiskerpad_file = None
-            output_file = None
+            whiskers_df_file = None
             
             try:
                 # Step 1: Trace and measure whiskers
@@ -524,7 +511,7 @@ For more information, see the documentation in the script header.
                         log_file.flush()
                         step_start_time = time.time()
                         
-                        output_file = cs.combine_to_file(output_filenames, whiskerpad_file)
+                        whiskers_df_file = cs.combine_to_file(output_filenames, whiskerpad_file)
                         
                         step_time = time.time() - step_start_time
                         log_file.write(f'Combining whiskers took {step_time:.2f} seconds.\n')
@@ -533,8 +520,8 @@ For more information, see the documentation in the script header.
                     elif not splitUp and output_filenames:
                         # Single-side tracking - use the single output file directly
                         log_file.write("=== STEP 2: Single-side tracking - using single output file ===\n")
-                        output_file = output_filenames[0]  # Use the single parquet file
-                        log_file.write(f'Using single-side file: {output_file}\n')
+                        whiskers_df_file = output_filenames[0]  # Use the single parquet file
+                        log_file.write(f'Using single-side file: {whiskers_df_file}\n')
                         log_file.flush()
                     else:
                         log_file.write("=== STEP 2: Cannot combine - missing trace files or whiskerpad file ===\n")
@@ -543,64 +530,30 @@ For more information, see the documentation in the script header.
                     log_file.write("=== STEP 2: Skipping combining whisker data ===\n")
                     # Look for existing combined file
                     if splitUp:
-                        output_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
+                        whiskers_df_file = os.path.join(os.path.dirname(input_file), f'{base_name}_combined.parquet')
                     else:
-                        output_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
+                        whiskers_df_file = os.path.join(os.path.dirname(input_file), f'{base_name}.parquet')
                     
-                    if os.path.exists(output_file):
-                        log_file.write(f"Using existing file: {output_file}\n")
+                    if os.path.exists(whiskers_df_file):
+                        log_file.write(f"Using existing file: {whiskers_df_file}\n")
                     else:
-                        log_file.write(f"Warning: Expected file not found: {output_file}\n")
+                        log_file.write(f"Warning: Expected file not found: {whiskers_df_file}\n")
                     log_file.flush()
 
-                # Step 3: Automatic whisker labelling using U-Net
-                if 'label' in steps_to_run:
-                    if output_file and os.path.exists(output_file):
-                        log_file.write("=== STEP 3: Assigning whisker IDs with U-Net ===\n")
-                        log_file.flush()
-                        step_start_time = time.time()
-                        
-                        unet_output_file = uc.assign_whisker_ids(input_file, output_file)
-                        if unet_output_file is not None:
-                            output_file = unet_output_file
-                            # Extract base name from output file more robustly
-                            output_filename = os.path.basename(output_file)
-                            if '.' in output_filename:
-                                base_name = output_filename.rsplit('.', 1)[0]
-                            else:
-                                base_name = output_filename
-                            step_time = time.time() - step_start_time
-                            log_file.write(f'Automatic labelling took {step_time:.2f} seconds.\n')
-                        else:
-                            log_file.write('U-Net labelling failed.\n')
-                        
-                        log_file.flush()
-                        gc.collect()
-                    else:
-                        log_file.write("=== STEP 3: Cannot label - missing tracking file ===\n")
-                        log_file.flush()
-                else:
-                    log_file.write("=== STEP 3: Skipping automatic whisker labeling ===\n")
-                    log_file.flush()
+                # Step 3: Whisker ID assignment
 
-                # Step 4: Reclassification fallback
-                if 'reclassify' in steps_to_run:
-                    if output_file and os.path.exists(output_file):
-                        log_file.write("=== STEP 4: Reclassifying whiskers ===\n")
+                if 'reclassify' in steps_to_run and whiskers_df_file and os.path.exists(whiskers_df_file):
+                    if args.classifier == 'features':
+                        log_file.write("=== STEP 3: Reclassifying whiskers based on whisker features ===\n")
                         log_file.flush()
                         step_start_time = time.time()
-                        
-                        # Only use whiskerpad_file if it exists (bilateral tracking)
                         if whiskerpad_file and os.path.exists(whiskerpad_file):
-                            updated_output_file = rc.reclassify(output_file, whiskerpad_file)
+                            updated_output_file = rc.reclassify(whiskers_df_file, whiskerpad_file)
                         else:
-                            # For single-side tracking, pass None for whiskerpad_file
-                            updated_output_file = rc.reclassify(output_file, None)
-                            
+                            updated_output_file = rc.reclassify(whiskers_df_file, None)
                         if updated_output_file is not None:
-                            output_file = updated_output_file
-                            # Extract base name from output file more robustly
-                            output_filename = os.path.basename(output_file)
+                            whiskers_df_file = updated_output_file
+                            output_filename = os.path.basename(whiskers_df_file)
                             if '.' in output_filename:
                                 base_name = output_filename.rsplit('.', 1)[0]
                             else:
@@ -609,74 +562,83 @@ For more information, see the documentation in the script header.
                             log_file.write(f'Reclassifying whiskers took {step_time:.2f} seconds.\n')
                         else:
                             log_file.write('Reclassification failed.\n')
-                        
                         log_file.flush()
                         gc.collect()
-                    else:
-                        log_file.write("=== STEP 4: Cannot reclassify - missing output file ===\n")
-                        log_file.flush()
-                elif 'gnn_reclassify' in steps_to_run:
-                    if output_file and os.path.exists(output_file):
-                        log_file.write("=== STEP 4: GNN-based whisker ID reassignment ===\n")
+                        
+                    elif args.classifier == 'unet':
+                        log_file.write("=== STEP 3: Extracting features with U-Net ===\n")
                         log_file.flush()
                         step_start_time = time.time()
-                        
-                        try:
-                            # Import GNN module and dependencies
-                            from wwutils.classifiers.gnn_whisker_tracker import reassign_whisker_ids_gnn
-                            
-                            # Load data
-                            df = pd.read_parquet(output_file)
-                            
-                            # Reassign IDs using GNN approach
-                            log_file.write("Applying GNN-based whisker ID reassignment...\n")
-                            log_file.flush()
-                            
-                            # Call the main GNN reassignment function
-                            df_reassigned = reassign_whisker_ids_gnn(
-                                df, 
-                                model_path=args.gnn_model if args.gnn_model else None,
-                                n_epochs=args.gnn_epochs,
-                                temporal_window=10,
-                                train_split=0.8,
-                                verbose=True
-                            )
-                            
-                            # Save results
-                            gnn_output_file = output_file.replace(".parquet", "_gnn.parquet")
-                            df_reassigned.to_parquet(gnn_output_file, index=False)
-                            output_file = gnn_output_file
-                            
-                            # Update base name
-                            output_filename = os.path.basename(output_file)
+                        unet_output_file = uc.assign_whisker_ids(
+                            input_file, 
+                            whiskers_df_file,
+                            model_path=args.model if args.model else None,
+                        )
+                        if unet_output_file is not None:
+                            whiskers_df_file = unet_output_file
+                            output_filename = os.path.basename(whiskers_df_file)
                             if '.' in output_filename:
                                 base_name = output_filename.rsplit('.', 1)[0]
                             else:
                                 base_name = output_filename
-                                
                             step_time = time.time() - step_start_time
-                            log_file.write(f'GNN whisker ID reassignment took {step_time:.2f} seconds.\n')
-                            log_file.write(f'Results saved to {gnn_output_file}\n')
-                            
+                            log_file.write(f'Automatic labelling took {step_time:.2f} seconds.\n')
+                        else:
+                            log_file.write('U-Net labelling failed.\n')
+                        log_file.flush()
+                        gc.collect()
+
+                    elif args.classifier == 'gnn':
+                        log_file.write("=== STEP 3: GNN-based whisker ID reassignment ===\n")
+                        log_file.flush()
+                        step_start_time = time.time()
+                        try:
+                            from wwutils.classifiers.gnn_classifier import reassign_whisker_ids_gnn
+                            df = pd.read_parquet(whiskers_df_file)
+                            log_file.write("Applying GNN-based whisker ID reassignment...\n")
+                            log_file.flush()
+                            df_reassigned, used_gnn = reassign_whisker_ids_gnn(
+                                df,
+                                model_path=args.model if args.model else None,
+                                n_epochs=args.epochs,
+                                temporal_window=10,
+                                train_split=0.8,
+                                verbose=True
+                            )
+                            gnn_output_file = whiskers_df_file.replace(".parquet", "_gnn.parquet")
+                            df_reassigned.to_parquet(gnn_output_file, index=False)
+                            whiskers_df_file = gnn_output_file
+                            output_filename = os.path.basename(whiskers_df_file)
+                            if '.' in output_filename:
+                                base_name = output_filename.rsplit('.', 1)[0]
+                            else:
+                                base_name = output_filename
+                            step_time = time.time() - step_start_time
+                            if used_gnn:
+                                log_file.write(f'GNN whisker ID reassignment took {step_time:.2f} seconds.\n')
+                                log_file.write(f'Results saved to {gnn_output_file}\n')
+                            else:
+                                log_file.write(f'Fallback spatial consistency reassignment took {step_time:.2f} seconds.\n')
+                                log_file.write(f'Note: GNN method failed, fallback method was used.\n')
+                                log_file.write(f'Results saved to {gnn_output_file}\n')
                         except ImportError as e:
                             log_file.write(f'GNN dependencies not available: {e}\n')
                             log_file.write('Install PyTorch and torch-geometric to use GNN tracking.\n')
                         except Exception as e:
                             log_file.write(f'GNN reassignment failed: {e}\n')
-                        
                         log_file.flush()
                         gc.collect()
-                    else:
-                        log_file.write("=== STEP 4: Cannot run GNN - missing output file ===\n")
-                        log_file.flush()
+                elif 'reclassify' in steps_to_run:
+                    log_file.write("=== STEP 3: Cannot perform ID assignment - missing whisker file ===\n")
+                    log_file.flush()
                 else:
-                    log_file.write("=== STEP 4: Skipping reclassification ===\n")
+                    log_file.write("=== STEP 3: Skipping whisker ID assignment ===\n")
                     log_file.flush()
 
-                # Step 5: Plot overlay
+                # Step 4: Plot overlay
                 if 'plot' in steps_to_run:
                     if base_name:
-                        log_file.write("=== STEP 5: Creating overlay plot ===\n")
+                        log_file.write("=== STEP 4: Creating overlay plot ===\n")
                         log_file.flush()
                         step_start_time = time.time()
                         
@@ -687,10 +649,10 @@ For more information, see the documentation in the script header.
                         log_file.flush()
                         gc.collect()
                     else:
-                        log_file.write("=== STEP 5: Cannot plot - missing base name ===\n")
+                        log_file.write("=== STEP 4: Cannot plot - missing base name ===\n")
                         log_file.flush()
                 else:
-                    log_file.write("=== STEP 5: Skipping overlay plot generation ===\n")
+                    log_file.write("=== STEP 4: Skipping overlay plot generation ===\n")
                     log_file.flush()
 
                 # Log completion
