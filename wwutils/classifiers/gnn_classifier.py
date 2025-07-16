@@ -160,7 +160,7 @@ if TORCH_AVAILABLE:
     class GNNWhiskerTracker:
         """Trainable tracker using a GNN model."""
 
-        def __init__(self, n_whiskers: int = 5, temporal_window: int = 10, device: str = "auto"):
+        def __init__(self, n_whiskers: int = 10, temporal_window: int = 10, device: str = "auto"):
             self.n_whiskers = n_whiskers
             self.temporal_window = temporal_window
             if device == "auto":
@@ -249,6 +249,7 @@ if TORCH_AVAILABLE:
             return history
 
         def predict(self, whisker_data: pd.DataFrame) -> np.ndarray:
+            """Predict whisker IDs with temporal consistency enforcement."""
             if self.model is None:
                 raise ValueError("Model not trained or loaded")
 
@@ -257,37 +258,207 @@ if TORCH_AVAILABLE:
             if not graphs:
                 return whisker_data["wid"].values
 
+            # Initialize result dataframe with original whisker data
+            result_df = whisker_data.copy()
             frames = sorted(whisker_data["fid"].unique())
-            frame_predictions: Dict[int, List[int]] = {}
+            
+            # Store initial IDs for later comparison
+            original_ids = result_df["wid"].copy()
+            
+            if len(frames) <= 0:
+                return original_ids.values
+                
+            # Initialize tracker for previous frame's whisker positions
+            prev_frame_wids = []
+            prev_frame_positions = {}
+            
+            # Process frames in order, maintaining temporal consistency
             self.model.eval()
+            
+            # Import linear_sum_assignment for Hungarian algorithm
+            from scipy.optimize import linear_sum_assignment
+            
             with torch.no_grad():
                 for i, g in enumerate(graphs):
                     if i >= len(frames):
                         break
+                    
                     g = g.to(self.device)
-                    out = self.model(g.x, g.edge_index)
-                    preds = torch.argmax(out, dim=1)
                     target_frame = frames[i]
                     frame_data = whisker_data[whisker_data["fid"] == target_frame]
-                    if len(preds) >= len(frame_data):
-                        pred_slice = preds[: len(frame_data)]
-                        mapped = [self.class_to_id[p.item()] for p in pred_slice]
-                        frame_predictions[target_frame] = mapped
+                    
+                    if len(frame_data) == 0:
+                        continue
+                    
+                    # Get all output probabilities
+                    out = self.model(g.x, g.edge_index)
+                    
+                    # Extract logits for current frame's whiskers
+                    if len(out) >= len(frame_data):
+                        # Take the slice corresponding to current frame
+                        logits = out[:len(frame_data)]
+                        
+                        # Convert log probabilities to probabilities
+                        probs = torch.exp(logits).cpu().numpy()
+                        
+                        # First frame or no previous whiskers - use Hungarian on GNN outputs directly
+                        if len(prev_frame_wids) == 0:
+                            # We negate probs because linear_sum_assignment minimizes cost
+                            row_ind, col_ind = linear_sum_assignment(-probs)
+                            
+                            # Map to original whisker IDs
+                            for j, row_idx in enumerate(frame_data.index):
+                                if j < len(row_ind):
+                                    # Get assigned class and map to whisker ID
+                                    assigned_class = col_ind[j]
+                                    wid = self.class_to_id[assigned_class]
+                                    result_df.loc[row_idx, "wid"] = wid
+                                    
+                                    # Store position for next frame matching
+                                    prev_frame_positions[wid] = {
+                                        'follicle_x': frame_data.loc[row_idx, 'follicle_x'],
+                                        'follicle_y': frame_data.loc[row_idx, 'follicle_y'],
+                                        'angle': frame_data.loc[row_idx, 'angle'] if 'angle' in frame_data.columns else 0,
+                                        'curvature': frame_data.loc[row_idx, 'curvature'] if 'curvature' in frame_data.columns else 0,
+                                        'length': frame_data.loc[row_idx, 'length'] if 'length' in frame_data.columns else 0
+                                    }
+                            
+                            prev_frame_wids = list(prev_frame_positions.keys())
+                        else:
+                            # Create cost matrix combining GNN predictions and spatial/feature consistency
+                            n_curr = len(frame_data)
+                            n_prev = len(prev_frame_wids)
+                            cost_matrix = np.full((n_curr, n_prev), 1000.0)
+                            
+                            # Fill cost matrix based on:
+                            # 1. GNN prediction probabilities
+                            # 2. Spatial position consistency
+                            # 3. Feature similarity (angle, curvature, etc.)
+                            
+                            for j, (_, curr_whisker) in enumerate(frame_data.iterrows()):
+                                curr_x = curr_whisker['follicle_x']
+                                curr_y = curr_whisker['follicle_y']
+                                curr_angle = curr_whisker.get('angle', 0)
+                                curr_curv = curr_whisker.get('curvature', 0)
+                                curr_length = curr_whisker.get('length', 0)
+                                
+                                # Get GNN prediction probabilities
+                                curr_probs = probs[j]
+                                
+                                for k, prev_wid in enumerate(prev_frame_wids):
+                                    prev_pos = prev_frame_positions[prev_wid]
+                                    
+                                    # Spatial position cost (normalized Euclidean distance)
+                                    spatial_dist = np.sqrt(
+                                        (curr_x - prev_pos['follicle_x'])**2 + 
+                                        (curr_y - prev_pos['follicle_y'])**2
+                                    )
+                                    max_dist = 100  # Normalize distance
+                                    spatial_cost = min(spatial_dist / max_dist, 1.0)
+                                    
+                                    # Angle difference (normalized)
+                                    angle_diff = min(
+                                        abs(curr_angle - prev_pos['angle']), 
+                                        360 - abs(curr_angle - prev_pos['angle'])
+                                    ) / 180.0
+                                    
+                                    # Feature costs
+                                    curv_diff = abs(curr_curv - prev_pos['curvature'])
+                                    length_ratio = 0.5
+                                    if curr_length > 0 and prev_pos['length'] > 0:
+                                        length_ratio = min(curr_length/prev_pos['length'], 
+                                                         prev_pos['length']/curr_length)
+                                    
+                                    # GNN prediction cost
+                                    # Convert previous whisker ID to class index
+                                    prev_class = self.id_to_class.get(prev_wid, -1)
+                                    gnn_cost = 1.0
+                                    if 0 <= prev_class < len(curr_probs):
+                                        gnn_cost = 1.0 - curr_probs[prev_class]
+                                    
+                                    # Combined weighted cost
+                                    # Weights based on importance for temporal consistency
+                                    cost = (
+                                        0.45 * spatial_cost +        # Position is most important
+                                        0.10 * angle_diff +          # Angle changes during movement
+                                        0.05 * curv_diff +           # Curvature can change
+                                        0.10 * (1.0 - length_ratio) + # Length should be fairly consistent
+                                        0.30 * gnn_cost              # GNN predictions still matter
+                                    )
+                                    
+                                    cost_matrix[j, k] = cost
+                            
+                            # Apply Hungarian algorithm for optimal assignment
+                            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+                            
+                            # Reset position tracking for this frame
+                            new_positions = {}
+                            
+                            # Apply assignments and store positions for next frame
+                            for j, k in zip(row_ind, col_ind):
+                                if j < n_curr and k < n_prev:
+                                    # Get whisker data
+                                    row_idx = frame_data.index[j]
+                                    assigned_wid = prev_frame_wids[k]
+                                    
+                                    # Update ID
+                                    result_df.loc[row_idx, "wid"] = assigned_wid
+                                    
+                                    # Store position for next frame
+                                    new_positions[assigned_wid] = {
+                                        'follicle_x': frame_data.iloc[j]['follicle_x'],
+                                        'follicle_y': frame_data.iloc[j]['follicle_y'],
+                                        'angle': frame_data.iloc[j].get('angle', 0),
+                                        'curvature': frame_data.iloc[j].get('curvature', 0),
+                                        'length': frame_data.iloc[j].get('length', 0)
+                                    }
+                            
+                            # Handle unassigned whiskers (new whiskers appearing)
+                            unassigned = set(range(n_curr)) - set(row_ind)
+                            for j in unassigned:
+                                if j < n_curr:
+                                    row_idx = frame_data.index[j]
+                                    
+                                    # Use GNN prediction for new whisker
+                                    best_class = np.argmax(probs[j])
+                                    new_id = self.class_to_id[best_class]
+                                    
+                                    # Ensure uniqueness - use next available integer ID
+                                    used_ids = set(new_positions.keys())
+                                    if new_id in used_ids:
+                                        # Find highest existing ID and add 1
+                                        all_ids = list(self.class_to_id.values()) + list(used_ids)
+                                        new_id = int(max(all_ids)) + 1
+                                    
+                                    result_df.loc[row_idx, "wid"] = new_id
+                                    
+                                    # Store position
+                                    new_positions[new_id] = {
+                                        'follicle_x': frame_data.iloc[j]['follicle_x'],
+                                        'follicle_y': frame_data.iloc[j]['follicle_y'],
+                                        'angle': frame_data.iloc[j].get('angle', 0),
+                                        'curvature': frame_data.iloc[j].get('curvature', 0),
+                                        'length': frame_data.iloc[j].get('length', 0)
+                                    }
+                            
+                            # Update for next frame
+                            prev_frame_positions = new_positions
+                            prev_frame_wids = list(new_positions.keys())
                     else:
-                        frame_predictions[target_frame] = frame_data["wid"].tolist()
-
-            results: List[int] = []
-            for _, row in whisker_data.iterrows():
-                fid = row["fid"]
-                if fid in frame_predictions:
-                    idx = whisker_data[whisker_data["fid"] == fid].index.get_loc(row.name)
-                    if idx < len(frame_predictions[fid]):
-                        results.append(frame_predictions[fid][idx])
-                    else:
-                        results.append(row["wid"])
-                else:
-                    results.append(row["wid"])
-            return np.array(results)
+                        # Not enough predictions - keep original IDs for this frame
+                        for row_idx in frame_data.index:
+                            wid = frame_data.loc[row_idx, "wid"]
+                            # Store position for next frame
+                            prev_frame_positions[wid] = {
+                                'follicle_x': frame_data.loc[row_idx, 'follicle_x'],
+                                'follicle_y': frame_data.loc[row_idx, 'follicle_y'],
+                                'angle': frame_data.loc[row_idx, 'angle'] if 'angle' in frame_data.columns else 0,
+                                'curvature': frame_data.loc[row_idx, 'curvature'] if 'curvature' in frame_data.columns else 0,
+                                'length': frame_data.loc[row_idx, 'length'] if 'length' in frame_data.columns else 0
+                            }
+                        prev_frame_wids = list(prev_frame_positions.keys())
+            
+            return result_df["wid"].values
 
         def save_model(self, path: str) -> None:
             if self.model is None:
@@ -306,7 +477,8 @@ if TORCH_AVAILABLE:
             )
 
         def load_model(self, path: str) -> None:
-            checkpoint = torch.load(path, map_location=self.device)
+            # Load with weights_only=False to allow sklearn objects
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
             self.n_whiskers = checkpoint["n_whiskers"]
             self.temporal_window = checkpoint["temporal_window"]
             self.input_dim = checkpoint["input_dim"]

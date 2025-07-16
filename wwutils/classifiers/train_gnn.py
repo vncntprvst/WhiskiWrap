@@ -30,7 +30,15 @@ except ImportError:
         
 def train(args: argparse.Namespace) -> None:
     df = pd.read_parquet(args.parquet)
-    tracker = GNNWhiskerTracker(n_whiskers=df["wid"].nunique(), temporal_window=args.temporal_window)
+    n_unique_whiskers = df["wid"].nunique()
+    print(f"Detected {n_unique_whiskers} unique whisker IDs in the dataset")
+    
+    # Set n_whiskers to at least the number of unique whisker IDs in the data,
+    # but with a minimum to handle new whiskers that might appear in test data
+    n_whiskers = max(n_unique_whiskers, args.min_whiskers)
+    print(f"Setting model capacity to {n_whiskers} whisker classes")
+    
+    tracker = GNNWhiskerTracker(n_whiskers=n_whiskers, temporal_window=args.temporal_window)
     tracker.train(df, n_epochs=args.epochs, train_split=args.train_split, verbose=True)
     output_path = args.output or os.path.join(os.path.dirname(__file__), "gnn_model.pt")
     tracker.save_model(output_path)
@@ -44,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     p.add_argument("--train-split", type=float, default=0.8, help="Training split ratio")
     p.add_argument("--temporal-window", type=int, default=10, help="Temporal window size")
+    p.add_argument("--min-whiskers", type=int, default=10, 
+                  help="Minimum number of whisker classes to support (default: 10)")
     return p.parse_args()
 
 

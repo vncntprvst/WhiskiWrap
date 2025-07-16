@@ -1,4 +1,4 @@
-# GNN-based Whisker Tracking
+# GNN-based Whisker ID Assignment
 
 This module provides a Graph Neural Network (GNN) approach for improving whisker ID consistency across video frames. Instead of treating each frame independently, the GNN considers temporal relationships between whisker detections to assign more consistent IDs.
 
@@ -63,7 +63,7 @@ python wwutils/classifiers/gnn_whisker_tracker.py test_videos/excerpt_video_upda
 
 3. **GNN Training**: Trains a Graph Convolutional Network to predict correspondence confidence between whisker pairs
 
-4. **ID Assignment**: Uses Hungarian algorithm with GNN-predicted costs to optimally assign whisker IDs
+4. **ID Assignment**: Uses Hungarian algorithm with GNN-predicted probabilities to optimally assign unique whisker IDs
 
 ## Advantages over Traditional Methods
 
@@ -86,6 +86,7 @@ Key parameters for tuning:
 
 - `--epochs`: Training epochs (more = better learning, slower)
 - `--lr`: Learning rate (0.001 typical, lower for fine-tuning)
+- `--min-whiskers`: Minimum number of whisker IDs the model can handle (default: 10)
 - `--hidden-dim`: Model capacity (64-128 typical)
 - `--max-spatial-distance`: Maximum distance for whisker connections
 - `--max-frame-gap`: Maximum frame separation for temporal connections
