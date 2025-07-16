@@ -458,7 +458,78 @@ if TORCH_AVAILABLE:
                             }
                         prev_frame_wids = list(prev_frame_positions.keys())
             
+            # Post-processing: Ensure no duplicate whisker IDs within a frame
+            result_df = self._ensure_unique_ids_per_frame(result_df)
+            
             return result_df["wid"].values
+
+        def _ensure_unique_ids_per_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+            """Ensure each frame has unique whisker IDs by prioritizing based on metrics.
+            
+            Args:
+                df: DataFrame with whisker tracking data
+                
+            Returns:
+                DataFrame with unique whisker IDs per frame
+            """
+            result = df.copy()
+            
+            # Determine the frame column name (either "fid" or "frame")
+            frame_col = "fid" if "fid" in result.columns else "frame"
+            
+            # Process each frame separately
+            for frame_num in result[frame_col].unique():
+                frame_mask = (result[frame_col] == frame_num)
+                frame_data = result[frame_mask]
+                
+                # Check for duplicate IDs in this frame
+                wids = frame_data["wid"].values
+                if len(wids) != len(set(wids)):
+                    # Group rows by wid
+                    for wid in set(wids):
+                        wid_mask = (frame_data["wid"] == wid)
+                        wid_count = wid_mask.sum()
+                        
+                        if wid_count > 1:
+                            # We have duplicates for this ID in this frame
+                            duplicate_indices = frame_data.index[wid_mask]
+                            
+                            # Choose which whisker keeps the original ID based on metrics
+                            # (Higher score = more likely to be a real whisker)
+                            scores = []
+                            for idx in duplicate_indices:
+                                row = frame_data.loc[idx]
+                                
+                                # Compute a score based on metrics that identify real whiskers
+                                # 1. Length (longer whiskers more likely to be real)
+                                length_score = row.get('length', 0)
+                                
+                                # 2. Distance from whiskerpad center (if defined)
+                                pad_dist_score = 0
+                                if 'whiskerpad_x' in row and 'whiskerpad_y' in row:
+                                    pad_x, pad_y = row['whiskerpad_x'], row['whiskerpad_y']
+                                    dist = np.sqrt((row['follicle_x'] - pad_x)**2 + (row['follicle_y'] - pad_y)**2)
+                                    # Closer to pad = higher score
+                                    pad_dist_score = 1000 / (dist + 1)
+                                
+                                # Combine scores (can adjust weights as needed)
+                                total_score = length_score + pad_dist_score
+                                scores.append((idx, total_score))
+                            
+                            # Sort by score (descending)
+                            sorted_scores = sorted(scores, key=lambda x: x[1], reverse=True)
+                            
+                            # Keep the highest scoring whisker with original ID
+                            kept_idx = sorted_scores[0][0]
+                            
+                            # Assign new IDs to the others (artifacts)
+                            all_ids = set(result["wid"].values)
+                            for idx, _ in sorted_scores[1:]:
+                                new_id = int(max(all_ids)) + 1
+                                result.loc[idx, "wid"] = new_id
+                                all_ids.add(new_id)
+            
+            return result
 
         def save_model(self, path: str) -> None:
             if self.model is None:
