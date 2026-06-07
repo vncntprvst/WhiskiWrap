@@ -215,10 +215,31 @@ def _side_offsets(whiskerpad) -> Dict[str, Tuple[float, float]]:
     return offsets
 
 
+def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0) -> pd.DataFrame:
+    """Drop detections whose follicle is far from their identity's base.
+
+    whisk's ``classify -n N`` is forced to output N identities every frame, so when
+    a real whisker is occluded (e.g. by a cue-tip) it labels noise (a tip fragment,
+    a stray hair, a cotton strand) with the freed-up identity. Such noise has a
+    follicle far from that identity's true base, so we reject detections more than
+    ``max_dist`` px from the identity's robust (median) follicle position. This
+    leaves a gap for the occluded frames rather than a wrong label.
+    """
+    if df.empty:
+        return df
+    keep = []
+    for wid, g in df.groupby("wid"):
+        cx, cy = g["follicle_x"].median(), g["follicle_y"].median()
+        d = np.hypot(g["follicle_x"] - cx, g["follicle_y"] - cy)
+        keep.append(g[d <= max_dist])
+    return pd.concat(keep) if keep else df
+
+
 def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       side_faces: Dict[str, str], whiskerpad=None,
                       n_per_side: Optional[Dict[str, int]] = None,
-                      output_path: Optional[str] = None, **classify_kw) -> Optional[str]:
+                      output_path: Optional[str] = None,
+                      follicle_max_dist: float = 40.0, **classify_kw) -> Optional[str]:
     """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
 
     ``side_faces`` maps face side -> the ``--face`` argument used at trace time
@@ -250,7 +271,12 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         return None
     hmm = pd.concat(hmm_parts, ignore_index=True)
 
-    out = apply_hmm_identity(combined, hmm).sort_values(["fid", "wid"])
+    out = apply_hmm_identity(combined, hmm)
+    if follicle_max_dist:
+        before = len(out)
+        out = filter_follicle_outliers(out, follicle_max_dist)
+        print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
+    out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
     out.to_parquet(output_path)
     print(f"[hmm_link] saved {len(out)} rows to {output_path}")
