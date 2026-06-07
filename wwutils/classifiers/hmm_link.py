@@ -252,6 +252,47 @@ def filter_length_outliers(df: pd.DataFrame, min_frac: float = 0.4) -> pd.DataFr
     return pd.concat(keep) if keep else df
 
 
+def estimate_follicle_gate(df: pd.DataFrame, frac: float = 0.25) -> float:
+    """Empirical follicle gate (px) ~ a fraction of the median whisker length.
+
+    Whisker length, inter-whisker spacing and follicle motion all scale with the
+    camera/lens/zoom, so anchoring the gate to the median traced length makes it
+    robust across setups (no hard-coded pixel value). Real follicle motion is a
+    small fraction of length; noise (cotton/tips) sits ~a whisker length away.
+    """
+    med_len = float(df["length"].median()) if len(df) else 0.0
+    return max(frac * med_len, 1.0)
+
+
+def reassign_by_centroid(df: pd.DataFrame, gate_px: float) -> pd.DataFrame:
+    """Per frame, assign each detection to the nearest identity centroid (Hungarian).
+
+    Corrects within-frame identity swaps (e.g. whisker 1 mislabelled 2 when whisker
+    2 is occluded) using each identity's robust (median) follicle centroid, and
+    drops detections farther than ``gate_px`` from every centroid (noise). One-to-one
+    per (frame, side); occluded identities simply go unmatched (a clean gap).
+    """
+    if df.empty:
+        return df
+    cen = df.groupby("wid")[["follicle_x", "follicle_y"]].median()
+    id_side = df.groupby("wid")["face_side"].first()
+    rows = []
+    for (fid, side), g in df.groupby(["fid", "face_side"]):
+        sid_ids = [w for w in cen.index if id_side[w] == side]
+        if not sid_ids:
+            continue
+        C = cen.loc[sid_ids].to_numpy(float)
+        G = g[["follicle_x", "follicle_y"]].to_numpy(float)
+        D = np.sqrt(((G[:, None, :] - C[None, :, :]) ** 2).sum(-1))
+        gi, ci = linear_sum_assignment(D)
+        for r, k in zip(gi, ci):
+            if D[r, k] <= gate_px:
+                row = g.iloc[r].copy()
+                row["wid"] = int(sid_ids[k])
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _runs(sorted_vals: List[int]) -> List[List[int]]:
     """Split a sorted list of ints into maximal consecutive runs."""
     runs: List[List[int]] = []
@@ -316,8 +357,9 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       side_faces: Dict[str, str], whiskerpad=None,
                       n_per_side: Optional[Dict[str, int]] = None,
                       output_path: Optional[str] = None,
-                      follicle_max_dist: float = 40.0, length_min_frac: float = 0.4,
-                      bridge_max_gap: int = 20, **classify_kw) -> Optional[str]:
+                      follicle_gate_frac: float = 0.25, follicle_max_dist: Optional[float] = None,
+                      length_min_frac: float = 0.4, bridge_max_gap: int = 20,
+                      **classify_kw) -> Optional[str]:
     """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
 
     ``side_faces`` maps face side -> the ``--face`` argument used at trace time
@@ -350,17 +392,19 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     hmm = pd.concat(hmm_parts, ignore_index=True)
 
     out = apply_hmm_identity(combined, hmm)
-    if follicle_max_dist:
-        before = len(out)
-        out = filter_follicle_outliers(out, follicle_max_dist)
-        print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
     if length_min_frac:
         before = len(out)
         out = filter_length_outliers(out, length_min_frac)
         print(f"[hmm_link] length-outlier filter dropped {before - len(out)} detections.")
+    # Empirical follicle gate (scales with camera/zoom via whisker length).
+    gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
+    print(f"[hmm_link] follicle gate = {gate:.1f} px")
+    before = len(out)
+    out = reassign_by_centroid(out, gate)   # fix identity swaps + drop far noise
+    print(f"[hmm_link] centroid re-assignment dropped {before - len(out)} far detections.")
     if bridge_max_gap:
         before = len(out)
-        out = bridge_gaps(out, combined, max_gap=bridge_max_gap,
+        out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
                           min_length_frac=length_min_frac or 0.4)
         print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
     out = out.sort_values(["fid", "wid"])
