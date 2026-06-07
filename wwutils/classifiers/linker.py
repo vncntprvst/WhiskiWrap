@@ -367,9 +367,14 @@ def link_whiskers(file_path: str, whiskerpad, plot: bool = False,
     for side in sorted(df["face_side"].unique()):
         sp = _side_params(side_map, side)
         df_side = df[df["face_side"] == side]
-        cleaned = clean_detections(df_side, params)
         if params.top_n_per_side and side in params.top_n_per_side:
-            cleaned = keep_top_n_per_frame(cleaned, params.top_n_per_side[side])
+            # top-N by length is a stronger, contact-robust noise filter than the
+            # global length threshold: keep it on the raw detections so a real
+            # whisker that briefly shortens (e.g. during cue-tip contact) is not
+            # dropped by clean_detections and replaced by a noise fragment.
+            cleaned = keep_top_n_per_frame(df_side, params.top_n_per_side[side])
+        else:
+            cleaned = clean_detections(df_side, params)
         if cleaned.empty:
             print(f"[linker] {side}: no detections after cleaning, skipping.")
             continue
