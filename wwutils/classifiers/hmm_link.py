@@ -443,9 +443,13 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     # Empirical follicle gate (scales with camera/zoom via whisker length).
     gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
     print(f"[hmm_link] follicle gate = {gate:.1f} px")
+    # Trust whisk's HMM identity for ambiguity resolution; only *remove* clear
+    # noise (a detection far from its identity's base, e.g. a cotton strand). We do
+    # NOT re-assign identities by position -- that flickers ("christmas tree") and
+    # can invert whole frames, undoing whisk's temporally-modelled identity.
     before = len(out)
-    out = reassign_by_tracking(out, gate)   # temporal continuity: fix swaps/shifts + drop far noise
-    print(f"[hmm_link] tracking re-assignment dropped {before - len(out)} far detections.")
+    out = filter_follicle_outliers(out, gate)
+    print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
     if bridge_max_gap:
         before = len(out)
         out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
