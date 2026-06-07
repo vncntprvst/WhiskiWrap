@@ -260,8 +260,52 @@ def estimate_follicle_gate(df: pd.DataFrame, frac: float = 0.25) -> float:
     robust across setups (no hard-coded pixel value). Real follicle motion is a
     small fraction of length; noise (cotton/tips) sits ~a whisker length away.
     """
+    # frac is a fraction of the median traced length; the gate is the per-frame
+    # follicle continuity radius (the base barely moves frame-to-frame, so a small
+    # fraction suffices and rejects noise that sits farther from the track).
     med_len = float(df["length"].median()) if len(df) else 0.0
     return max(frac * med_len, 1.0)
+
+
+def reassign_by_tracking(df: pd.DataFrame, gate_px: float, max_missed: int = 30) -> pd.DataFrame:
+    """Forward temporal re-assignment of identities (continuity-aware).
+
+    Per side, processes frames in order and assigns each detection to the closest
+    identity *predicted position* (its last seen follicle, or its global centroid if
+    not seen within ``max_missed`` frames). Temporal continuity keeps whiskers on
+    their own track even when their bases are close (~px apart) or one is occluded,
+    fixing the swaps/shifts that independent per-frame matching produces. Detections
+    farther than ``gate_px`` from every prediction are dropped (noise/cotton).
+    """
+    if df.empty:
+        return df
+    cen = df.groupby("wid")[["follicle_x", "follicle_y"]].median()
+    id_side = df.groupby("wid")["face_side"].first()
+    rows = []
+    for side in df["face_side"].unique():
+        ids = [w for w in cen.index if id_side[w] == side]
+        if not ids:
+            continue
+        last = {w: cen.loc[w].to_numpy(float) for w in ids}
+        missed = {w: 0 for w in ids}
+        sd = df[df["face_side"] == side]
+        for fid in sorted(sd["fid"].unique()):
+            g = sd[sd["fid"] == fid]
+            G = g[["follicle_x", "follicle_y"]].to_numpy(float)
+            P = np.array([last[w] if missed[w] <= max_missed else cen.loc[w].to_numpy(float)
+                          for w in ids])
+            D = np.sqrt(((G[:, None, :] - P[None, :, :]) ** 2).sum(-1))
+            gi, ci = linear_sum_assignment(D)
+            matched = set()
+            for r, k in zip(gi, ci):
+                if D[r, k] <= gate_px:
+                    w = ids[k]
+                    row = g.iloc[r].copy(); row["wid"] = int(w); rows.append(row)
+                    last[w] = G[r]; missed[w] = 0; matched.add(k)
+            for j, w in enumerate(ids):
+                if j not in matched:
+                    missed[w] += 1
+    return pd.DataFrame(rows)
 
 
 def reassign_by_centroid(df: pd.DataFrame, gate_px: float) -> pd.DataFrame:
@@ -357,7 +401,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       side_faces: Dict[str, str], whiskerpad=None,
                       n_per_side: Optional[Dict[str, int]] = None,
                       output_path: Optional[str] = None,
-                      follicle_gate_frac: float = 0.25, follicle_max_dist: Optional[float] = None,
+                      follicle_gate_frac: float = 0.15, follicle_max_dist: Optional[float] = None,
                       length_min_frac: float = 0.4, bridge_max_gap: int = 20,
                       **classify_kw) -> Optional[str]:
     """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
@@ -400,8 +444,8 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
     print(f"[hmm_link] follicle gate = {gate:.1f} px")
     before = len(out)
-    out = reassign_by_centroid(out, gate)   # fix identity swaps + drop far noise
-    print(f"[hmm_link] centroid re-assignment dropped {before - len(out)} far detections.")
+    out = reassign_by_tracking(out, gate)   # temporal continuity: fix swaps/shifts + drop far noise
+    print(f"[hmm_link] tracking re-assignment dropped {before - len(out)} far detections.")
     if bridge_max_gap:
         before = len(out)
         out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
