@@ -235,11 +235,89 @@ def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0) -> pd.Dat
     return pd.concat(keep) if keep else df
 
 
+def filter_length_outliers(df: pd.DataFrame, min_frac: float = 0.4) -> pd.DataFrame:
+    """Drop detections much shorter than their identity's typical length.
+
+    When a real whisker is occluded, ``classify`` may label a short stray hair
+    sitting near its base with that identity (so the follicle filter misses it).
+    A real whisker's length is fairly stable, so detections shorter than
+    ``min_frac`` x the identity's median length are rejected.
+    """
+    if df.empty:
+        return df
+    keep = []
+    for wid, g in df.groupby("wid"):
+        thr = g["length"].median() * min_frac
+        keep.append(g[g["length"] >= thr])
+    return pd.concat(keep) if keep else df
+
+
+def _runs(sorted_vals: List[int]) -> List[List[int]]:
+    """Split a sorted list of ints into maximal consecutive runs."""
+    runs: List[List[int]] = []
+    for v in sorted_vals:
+        if runs and v == runs[-1][-1] + 1:
+            runs[-1].append(v)
+        else:
+            runs.append([v])
+    return runs
+
+
+def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
+                gate_px: float = 25.0, min_length_frac: float = 0.4) -> pd.DataFrame:
+    """Recover identities for frames where a *visible* whisker was left unclassified.
+
+    For each identity, short gaps (<= ``max_gap`` frames) between present frames are
+    filled by searching the combined detections for an as-yet-unassigned, long
+    enough whisker near the interpolated follicle position. This recovers whiskers
+    that whisk failed to classify (``state = -1``) without inventing a whisker for
+    genuinely occluded frames (no suitable detection exists there).
+    """
+    if out.empty:
+        return out
+    assigned = set(out.index)
+    new_rows = []
+    for side in out["face_side"].unique():
+        cs = combined[combined["face_side"] == side]
+        for wid, g in out[out["face_side"] == side].groupby("wid"):
+            g = g.sort_values("fid")
+            present = set(g["fid"].tolist())
+            med_len = g["length"].median()
+            fol = g.drop_duplicates("fid").set_index("fid")[["follicle_x", "follicle_y"]]
+            fmin, fmax = g["fid"].iloc[0], g["fid"].iloc[-1]
+            missing = [f for f in range(int(fmin), int(fmax) + 1) if f not in present]
+            for run in _runs(missing):
+                if len(run) > max_gap:
+                    continue
+                a, b = run[0] - 1, run[-1] + 1
+                fa, fb = fol.loc[a], fol.loc[b]
+                for f in run:
+                    t = (f - a) / (b - a)
+                    ex = fa["follicle_x"] * (1 - t) + fb["follicle_x"] * t
+                    ey = fa["follicle_y"] * (1 - t) + fb["follicle_y"] * t
+                    cand = cs[(cs["fid"] == f) & (~cs.index.isin(assigned))
+                              & (cs["length"] >= min_length_frac * med_len)]
+                    if cand.empty:
+                        continue
+                    d = np.hypot(cand["follicle_x"] - ex, cand["follicle_y"] - ey)
+                    if d.min() <= gate_px:
+                        idx = d.idxmin()
+                        row = cs.loc[idx].copy()
+                        row["label"] = row["wid"]
+                        row["wid"] = int(wid)
+                        new_rows.append(row)
+                        assigned.add(idx)
+    if new_rows:
+        out = pd.concat([out, pd.DataFrame(new_rows)])
+    return out
+
+
 def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       side_faces: Dict[str, str], whiskerpad=None,
                       n_per_side: Optional[Dict[str, int]] = None,
                       output_path: Optional[str] = None,
-                      follicle_max_dist: float = 40.0, **classify_kw) -> Optional[str]:
+                      follicle_max_dist: float = 40.0, length_min_frac: float = 0.4,
+                      bridge_max_gap: int = 20, **classify_kw) -> Optional[str]:
     """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
 
     ``side_faces`` maps face side -> the ``--face`` argument used at trace time
@@ -276,6 +354,15 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         before = len(out)
         out = filter_follicle_outliers(out, follicle_max_dist)
         print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
+    if length_min_frac:
+        before = len(out)
+        out = filter_length_outliers(out, length_min_frac)
+        print(f"[hmm_link] length-outlier filter dropped {before - len(out)} detections.")
+    if bridge_max_gap:
+        before = len(out)
+        out = bridge_gaps(out, combined, max_gap=bridge_max_gap,
+                          min_length_frac=length_min_frac or 0.4)
+        print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
     out.to_parquet(output_path)
