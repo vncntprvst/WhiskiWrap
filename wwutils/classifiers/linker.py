@@ -61,6 +61,13 @@ class LinkerParams:
     """Tunable parameters for the linker (defaults validated on the excerpt)."""
     # Stage 0 -- detection cleaning.
     length_frac: float = 0.25            # keep length > max(median_len)/ (1/frac)
+    # Optional: keep only the N longest detections per (frame, side) before
+    # linking. Real whiskers are the long traces; short fragments / intruding
+    # objects (e.g. a cue-tip) are noise that fragments the tracker. Supply a
+    # per-side count, e.g. {"left": 3, "right": 2}; None disables it.
+    # NOTE: the count varies by session (some sides have fewer whiskers), so it
+    # must be set per side rather than assumed.
+    top_n_per_side: Optional[Dict[str, int]] = None
     # Stage 1 -- forward assignment cost weights and gating.
     w_position: float = 1.0              # per pixel
     w_angle: float = 0.5                 # per degree
@@ -99,6 +106,19 @@ def clean_detections(df_side: pd.DataFrame, params: LinkerParams) -> pd.DataFram
     median_len = df_side.groupby("wid")["length"].median()
     threshold = median_len.max() * params.length_frac
     return df_side[df_side["length"] > threshold].copy()
+
+
+def keep_top_n_per_frame(df_side: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Keep only the ``n`` longest detections in each frame of one side.
+
+    Real whiskers are the long traces; short fragments and intruding objects
+    (e.g. a cue-tip touching the face) are noise. Restricting each frame to the
+    N longest detections removes that noise before tracking, which sharply
+    reduces track fragmentation on busy sides.
+    """
+    if df_side.empty or n is None:
+        return df_side
+    return df_side.sort_values("length", ascending=False).groupby("fid").head(n)
 
 
 # --------------------------------------------------------------------------- #
@@ -348,6 +368,8 @@ def link_whiskers(file_path: str, whiskerpad, plot: bool = False,
         sp = _side_params(side_map, side)
         df_side = df[df["face_side"] == side]
         cleaned = clean_detections(df_side, params)
+        if params.top_n_per_side and side in params.top_n_per_side:
+            cleaned = keep_top_n_per_frame(cleaned, params.top_n_per_side[side])
         if cleaned.empty:
             print(f"[linker] {side}: no detections after cleaning, skipping.")
             continue

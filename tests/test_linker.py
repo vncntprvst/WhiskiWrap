@@ -72,6 +72,18 @@ def test_consolidate_never_merges_overlapping(synth_clean):
     assert consolidated["track_id"].nunique() == 2
 
 
+def test_keep_top_n_per_frame_drops_noise(detection_factory, df_factory):
+    """top-N-by-length keeps the long real whiskers and drops short noise."""
+    rows = []
+    for fid in range(5):
+        rows.append(detection_factory(fid, 0, 0, "left", 100, 60, 65, length=200))
+        rows.append(detection_factory(fid, 1, 1, "left", 100, 140, 35, length=190))
+        rows.append(detection_factory(fid, 9, 9, "left", 300, 300, 110, length=20))  # noise
+    kept = linker.keep_top_n_per_frame(df_factory(rows), 2)
+    assert set(kept["gt_wid"]) == {0, 1}
+    assert (kept.groupby("fid").size() == 2).all()
+
+
 def test_two_chunks_stable_identity(synth_two_chunks):
     """Identity is stable across a chunk boundary (linker ignores chunk_start)."""
     linked = linker.link_side_forward(synth_two_chunks, linker.LinkerParams())
