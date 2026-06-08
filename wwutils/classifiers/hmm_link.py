@@ -105,34 +105,41 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
                             axis: str = "follicle_y") -> pd.DataFrame:
     """Assign a global identity (``gid``) across chunks.
 
-    ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where
-    each df contains only identified detections (``state`` >= 0) with a global
-    ``fid`` and the ``axis`` column. Identities are matched chunk-to-chunk by mean
-    position along ``axis`` (a small Hungarian assignment per boundary).
+    ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where each
+    df contains only identified detections (``state`` >= 0) with a global ``fid``.
+    Identities are matched chunk-to-chunk by a small Hungarian assignment on the
+    **2D** mean follicle position (follicle_x, follicle_y). The follicle base barely
+    moves during whisking, so the robust whole-chunk mean is a stable signature;
+    using both axes (vs only ``axis`` previously) disambiguates whiskers that share
+    a similar follicle_y, which is the main cross-chunk swap source.
     """
     chunks = sorted(chunks, key=lambda t: t[0])
     out = []
-    ref: Optional[Dict[int, float]] = None  # global_id -> last axis position
+    ref: Optional[Dict[int, np.ndarray]] = None  # gid -> [fx, fy]
     for _, d in chunks:
         if d.empty:
             continue
-        means = d.groupby("state")[axis].mean()
+        pos = d.groupby("state")[["follicle_x", "follicle_y"]].mean()
         if ref is None:
-            mapping = {st: i for i, st in enumerate(means.sort_values().index)}
+            mapping = {st: i for i, st in enumerate(pos[axis].sort_values().index)}
         else:
-            rids = list(ref.keys()); rpos = np.array([ref[r] for r in rids])
-            sids = list(means.index); spos = means.values
-            cost = np.abs(rpos[:, None] - spos[None, :])
+            rids = list(ref.keys()); rmat = np.array([ref[r] for r in rids])
+            sids = list(pos.index)
+            smat = pos.loc[sids, ["follicle_x", "follicle_y"]].to_numpy(float)
+            cost = np.linalg.norm(rmat[:, None, :] - smat[None, :, :], axis=2)
             ri, ci = linear_sum_assignment(cost)
             mapping = {sids[c]: rids[r] for r, c in zip(ri, ci)}
-            # any unmatched current identities get new global ids
-            nxt = (max(ref.keys()) + 1) if ref else 0
-            for st in means.index:
-                if st not in mapping:
-                    mapping[st] = nxt; nxt += 1
+        # any state not matched (new/unmatched identity) gets a fresh global id
+        nxt = (max(mapping.values()) + 1) if mapping else 0
+        if ref:
+            nxt = max(nxt, max(ref.keys()) + 1)
+        for st in pos.index:
+            if st not in mapping:
+                mapping[st] = nxt; nxt += 1
         dd = d.copy(); dd["gid"] = dd["state"].map(mapping)
         out.append(dd)
-        ref = {mapping[st]: means.loc[st] for st in means.index}
+        ref = {mapping[st]: pos.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
+               for st in pos.index}
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 

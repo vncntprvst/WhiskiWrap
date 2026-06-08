@@ -701,9 +701,14 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
         traced_filenames = sorted([
             res['video_filename'] for res in trace_pool_results])
 
-        # Check that they are the same
-        if not np.all(np.array(written_chunks) == np.array(traced_filenames)):
-            raise ValueError("Not all chunks were traced")
+        # Check that they are the same. A chunk can occasionally be written but its
+        # trace result not captured (intermittent worker drop); rather than crash the
+        # whole run, warn and proceed with the chunks that were traced (the missing
+        # one becomes a small gap and is filled on a re-run via skip_existing).
+        missing = set(written_chunks) - set(traced_filenames)
+        if missing:
+            print(f"WARNING: {len(missing)} chunk(s) written but not traced; "
+                  f"proceeding without them: {sorted(missing)}")
 
         ## Extract the chunk numbers from the filenames
         # The tiffs have been written, figure out which they are

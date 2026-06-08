@@ -623,10 +623,16 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
 
     for _, frame_whiskers in whiskers.items():
         for _, wseg in frame_whiskers.items():
+            # Skip degenerate zero-length segments (no traced points). These occur
+            # on low-contrast/noisy frames and would otherwise crash on wseg.x[-1].
+            if len(wseg.x) == 0:
+                if measurements is not None:
+                    measurements_idx += 1
+                continue
             whisker_data = {
                 'chunk_start': chunk_start,
                 'fid': wseg.time + chunk_start,
-                'wid': wseg.id                
+                'wid': wseg.id
             }
 
             if measurements is not None:
@@ -647,11 +653,24 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
                 })
                 measurements_idx += 1
             else:
+                # No measurements for this chunk (measure failed / file missing).
+                # Still write the SAME schema as the measured branch (NaN for the
+                # measurement fields) so per-chunk parquets merge without a schema
+                # mismatch; geometry comes straight from the trace.
                 whisker_data.update({
-                    'follicle_x': wseg.x[-1],
-                    'follicle_y': wseg.y[-1],
-                    'tip_x': wseg.x[0],
-                    'tip_y': wseg.y[0]
+                    'length': float('nan'),
+                    'score': float('nan'),
+                    'angle': float('nan'),
+                    'curvature': float('nan'),
+                    'pixel_length': len(wseg.x),
+                    'follicle_x': float(wseg.x[-1]),
+                    'follicle_y': float(wseg.y[-1]),
+                    'tip_x': float(wseg.x[0]),
+                    'tip_y': float(wseg.y[0]),
+                    'label': 0,
+                    'face_x': 0,
+                    'face_y': 0,
+                    'face_side': face_side
                 })
 
             summary_data.append(whisker_data)
@@ -716,8 +735,11 @@ def merge_parquet_files(temp_dir, output_filename):
     # Read all Parquet files into a list of tables
     tables = [pq.read_table(f) for f in parquet_files_sorted]
 
-    # Concatenate all tables
-    combined_table = pa.concat_tables(tables)
+    # Concatenate all tables. Use permissive promotion so chunks with slightly
+    # different inferred schemas (e.g. a chunk that produced no measurements, or
+    # int-vs-float column types on sparse/noisy data) still merge instead of
+    # crashing the whole run.
+    combined_table = pa.concat_tables(tables, promote_options='permissive')
 
     # Write the combined table to the final Parquet file
     pq.write_table(combined_table, output_filename)
