@@ -222,7 +222,8 @@ def _side_offsets(whiskerpad) -> Dict[str, Tuple[float, float]]:
     return offsets
 
 
-def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0) -> pd.DataFrame:
+def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0,
+                             follicle_window: int = 31) -> pd.DataFrame:
     """Drop detections whose follicle is far from their identity's base.
 
     whisk's ``classify -n N`` is forced to output N identities every frame, so when
@@ -236,7 +237,13 @@ def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0) -> pd.Dat
         return df
     keep = []
     for wid, g in df.groupby("wid"):
-        cx, cy = g["follicle_x"].median(), g["follicle_y"].median()
+        g = g.sort_values("fid")
+        # Local (rolling) median follicle so the reference tracks head movement;
+        # a global median wrongly drops real whiskers when the head shifts during
+        # the clip (e.g. high-motion windows). Detections far from the *local* base
+        # are still rejected (stray hairs / cotton).
+        cx = g["follicle_x"].rolling(follicle_window, center=True, min_periods=1).median()
+        cy = g["follicle_y"].rolling(follicle_window, center=True, min_periods=1).median()
         d = np.hypot(g["follicle_x"] - cx, g["follicle_y"] - cy)
         keep.append(g[d <= max_dist])
     return pd.concat(keep) if keep else df
