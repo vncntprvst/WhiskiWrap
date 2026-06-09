@@ -101,45 +101,91 @@ def estimate_n_per_side(df: pd.DataFrame, *, length_frac: float = 0.5,
 # --------------------------------------------------------------------------- #
 # Cross-chunk stitching
 # --------------------------------------------------------------------------- #
+def _boundary_pos(d: pd.DataFrame, which: str, k: int) -> pd.DataFrame:
+    """Per-state median 2D follicle over the first/last ``k`` frames of a chunk.
+
+    Falls back to the whole-chunk mean for a state absent from the boundary window.
+    """
+    fids = sorted(d["fid"].unique())
+    keep = set(fids[-k:] if which == "end" else fids[:k])
+    m = d[d["fid"].isin(keep)].groupby("state")[["follicle_x", "follicle_y"]].median()
+    full = d.groupby("state")[["follicle_x", "follicle_y"]].mean()
+    for st in full.index:
+        if st not in m.index:
+            m.loc[st] = full.loc[st]
+    return m
+
+
+def _match_states(ref: Dict[int, np.ndarray], pos: pd.DataFrame,
+                  margin: float) -> Tuple[Dict[int, int], bool]:
+    """Hungarian-match a chunk's per-state positions to reference gid positions.
+
+    Returns (state->gid mapping, confident) where ``confident`` is True only if
+    every state's nearest reference is clearly closer than its second nearest (by
+    ``margin`` px) -- i.e. the match is unambiguous.
+    """
+    rids = list(ref.keys()); rmat = np.array([ref[r] for r in rids])
+    sids = list(pos.index)
+    smat = pos.loc[sids, ["follicle_x", "follicle_y"]].to_numpy(float)
+    cost = np.linalg.norm(rmat[:, None, :] - smat[None, :, :], axis=2)  # [nref, nsid]
+    ri, ci = linear_sum_assignment(cost)
+    mapping = {sids[c]: rids[r] for r, c in zip(ri, ci)}
+    confident = True
+    for c in range(len(sids)):
+        col = np.sort(cost[:, c])
+        if len(col) > 1 and col[1] - col[0] < margin:
+            confident = False
+            break
+    return mapping, confident
+
+
 def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
-                            axis: str = "follicle_y") -> pd.DataFrame:
+                            axis: str = "follicle_y", boundary_frames: int = 25,
+                            confident_margin: float = 10.0) -> pd.DataFrame:
     """Assign a global identity (``gid``) across chunks.
 
     ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where each
     df contains only identified detections (``state`` >= 0) with a global ``fid``.
-    Identities are matched chunk-to-chunk by a small Hungarian assignment on the
-    **2D** mean follicle position (follicle_x, follicle_y). The follicle base barely
-    moves during whisking, so the robust whole-chunk mean is a stable signature;
-    using both axes (vs only ``axis`` previously) disambiguates whiskers that share
-    a similar follicle_y, which is the main cross-chunk swap source.
+    Across each seam, identities are matched by 2D follicle position using a hybrid
+    of two signatures:
+      * **boundary** -- median over the last ``boundary_frames`` of one chunk vs the
+        first of the next; this follows the actual transition and disambiguates close
+        whiskers (e.g. id1/id2 ~15 px apart) that a whole-chunk mean flips when the
+        per-chunk means happen to cross.
+      * **whole-chunk mean** -- robust when a whisker is occluded near the boundary
+        (the boundary frames are then unreliable).
+    The boundary match is used when it is unambiguous (margin > ``confident_margin``);
+    otherwise it falls back to the whole-chunk-mean match.
     """
     chunks = sorted(chunks, key=lambda t: t[0])
     out = []
-    ref: Optional[Dict[int, np.ndarray]] = None  # gid -> [fx, fy]
+    ref_b: Optional[Dict[int, np.ndarray]] = None  # gid -> boundary pos at prev end
+    ref_m: Optional[Dict[int, np.ndarray]] = None  # gid -> whole-chunk mean pos
     for _, d in chunks:
         if d.empty:
             continue
-        pos = d.groupby("state")[["follicle_x", "follicle_y"]].mean()
-        if ref is None:
-            mapping = {st: i for i, st in enumerate(pos[axis].sort_values().index)}
+        start_b = _boundary_pos(d, "start", boundary_frames)
+        mean_pos = d.groupby("state")[["follicle_x", "follicle_y"]].mean()
+        if ref_b is None:
+            mapping = {st: i for i, st in enumerate(start_b[axis].sort_values().index)}
         else:
-            rids = list(ref.keys()); rmat = np.array([ref[r] for r in rids])
-            sids = list(pos.index)
-            smat = pos.loc[sids, ["follicle_x", "follicle_y"]].to_numpy(float)
-            cost = np.linalg.norm(rmat[:, None, :] - smat[None, :, :], axis=2)
-            ri, ci = linear_sum_assignment(cost)
-            mapping = {sids[c]: rids[r] for r, c in zip(ri, ci)}
+            mapping, confident = _match_states(ref_b, start_b, confident_margin)
+            if not confident:
+                mapping, _ = _match_states(ref_m, mean_pos, confident_margin)
         # any state not matched (new/unmatched identity) gets a fresh global id
         nxt = (max(mapping.values()) + 1) if mapping else 0
-        if ref:
-            nxt = max(nxt, max(ref.keys()) + 1)
-        for st in pos.index:
+        if ref_b:
+            nxt = max(nxt, max(ref_b.keys()) + 1)
+        for st in d["state"].unique():
             if st not in mapping:
                 mapping[st] = nxt; nxt += 1
         dd = d.copy(); dd["gid"] = dd["state"].map(mapping)
         out.append(dd)
-        ref = {mapping[st]: pos.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
-               for st in pos.index}
+        end_b = _boundary_pos(d, "end", boundary_frames)
+        ref_b = {mapping[st]: end_b.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
+                 for st in end_b.index}
+        ref_m = {mapping[st]: mean_pos.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
+                 for st in mean_pos.index}
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
