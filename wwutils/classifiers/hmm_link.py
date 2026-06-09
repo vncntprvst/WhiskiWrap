@@ -268,6 +268,36 @@ def filter_length_outliers(df: pd.DataFrame, min_frac: float = 0.4) -> pd.DataFr
     return pd.concat(keep) if keep else df
 
 
+def filter_angle_outliers(df: pd.DataFrame, window: int = 31, angle_k: float = 4.0,
+                          len_lo: float = 0.6, len_hi: float = 1.7) -> pd.DataFrame:
+    """Drop brief detections whose angle AND length both depart from the local trend.
+
+    A wrong detection that momentarily grabs an identity (e.g. a stray nearly
+    orthogonal to the whisker) shows up as a single frame whose angle is far from
+    the identity's local rolling-median angle *and* whose length is abnormal.
+    Requiring BOTH anomalies spares real fast-whisking frames (angle swings a lot
+    but length stays normal). Compared per identity against a centered rolling
+    median so the whisking sweep itself is not flagged.
+    """
+    if df.empty:
+        return df
+
+    def adiff(a, b):
+        return np.abs(((a - b + 180) % 360) - 180)
+
+    keep = []
+    for wid, g in df.groupby("wid"):
+        g = g.sort_values("fid")
+        rma = g["angle"].rolling(window, center=True, min_periods=5).median()
+        rml = g["length"].rolling(window, center=True, min_periods=5).median()
+        amad = adiff(g["angle"], rma)
+        scale = max(np.nanmedian(amad), 3.0)
+        ang_out = amad > angle_k * scale
+        len_out = (g["length"] < len_lo * rml) | (g["length"] > len_hi * rml)
+        keep.append(g[~(ang_out & len_out)])
+    return pd.concat(keep) if keep else df
+
+
 def estimate_follicle_gate(df: pd.DataFrame, frac: float = 0.25) -> float:
     """Empirical follicle gate (px) ~ a fraction of the median whisker length.
 
@@ -419,7 +449,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       output_path: Optional[str] = None,
                       follicle_gate_frac: float = 0.15, follicle_max_dist: Optional[float] = None,
                       length_min_frac: float = 0.4, bridge_max_gap: int = 20,
-                      **classify_kw) -> Optional[str]:
+                      angle_outlier_k: float = 4.0, **classify_kw) -> Optional[str]:
     """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
 
     ``side_faces`` maps face side -> the ``--face`` argument used at trace time
@@ -471,6 +501,10 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
                           min_length_frac=length_min_frac or 0.4)
         print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
+    if angle_outlier_k:
+        before = len(out)
+        out = filter_angle_outliers(out, angle_k=angle_outlier_k)
+        print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
     out.to_parquet(output_path)
