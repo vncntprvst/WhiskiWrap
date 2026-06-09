@@ -238,10 +238,12 @@ def filter_follicle_outliers(df: pd.DataFrame, max_dist: float = 40.0,
     keep = []
     for wid, g in df.groupby("wid"):
         g = g.sort_values("fid")
-        # Local (rolling) median follicle so the reference tracks head movement;
-        # a global median wrongly drops real whiskers when the head shifts during
-        # the clip (e.g. high-motion windows). Detections far from the *local* base
-        # are still rejected (stray hairs / cotton).
+        # Local (rolling) median follicle so the reference tracks the follicle's own
+        # motion. The head is fixed, but the whiskerpad -- and thus the follicle
+        # positions -- shifts during whisking, so a global whole-clip median wrongly
+        # drops real whiskers in extreme-phase frames whose base sits at the edge of
+        # its range. Detections far from the *local* base are still rejected (cotton /
+        # stray hairs).
         cx = g["follicle_x"].rolling(follicle_window, center=True, min_periods=1).median()
         cy = g["follicle_y"].rolling(follicle_window, center=True, min_periods=1).median()
         d = np.hypot(g["follicle_x"] - cx, g["follicle_y"] - cy)
