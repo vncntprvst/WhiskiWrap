@@ -58,6 +58,30 @@ def train_coverage(combined: pd.DataFrame, gt: pd.DataFrame, *,
             "n_train": len(y), "pos_rate": float(y.mean())}
 
 
+def train_coverage_multi(pairs, *, k: int = 16, gate_px: float = 12.0) -> Dict:
+    """Train one production coverage model from several clips.
+
+    ``pairs`` = list of (combined_df, gt_df). Pooling multiple animals makes the universal
+    real-vs-noise boundary more robust. Labels come from matching each clip's combined->GT.
+    """
+    if not _SKLEARN:
+        raise ImportError("scikit-learn required for the coverage model")
+    Xs, ys = [], []
+    for comb, gt in pairs:
+        labeled = match_to_gt(comb, gt, gate_px=gate_px)
+        Xs.append(_features(labeled, k=k))
+        ys.append(labeled["is_real"].to_numpy(int))
+    X = pd.concat(Xs, ignore_index=True)
+    y = np.concatenate(ys)
+    w = np.where(y == 1, (y == 0).sum() / max((y == 1).sum(), 1), 1.0)
+    clf = HistGradientBoostingClassifier(max_depth=4, learning_rate=0.1, max_iter=300,
+                                         l2_regularization=1.0, early_stopping=True,
+                                         random_state=0)
+    clf.fit(X, y, sample_weight=w)
+    return {"model": clf, "features": dF.COVERAGE_FEATURES, "k": k,
+            "n_train": len(y), "pos_rate": float(y.mean()), "n_clips": len(pairs)}
+
+
 def predict_real(df: pd.DataFrame, bundle: Dict) -> np.ndarray:
     """Return p(real) for each row of ``df``."""
     X = _features(df, k=bundle.get("k", 16))

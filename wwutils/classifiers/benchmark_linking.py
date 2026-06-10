@@ -32,12 +32,13 @@ CLIPS: Dict[str, dict] = {
         gt=f"{_E}/whisker_active/sc013_active_updated_edited - backup.parquet",
         side_faces={"left": "left", "right": "right"}, n_frames=4000),
     "seg04": dict(
-        kind="autoref",
+        kind="gt",
         combined=f"{_E}/whisker_gt_seg04/sc014_0315_001_TopCam0_seg04_493300_493931.parquet",
         wt_dir=f"{_E}/whisker_gt_seg04/WT",
         base_name="sc014_0315_001_TopCam0_seg04_493300_493931",
         whiskerpad=f"{_E}/whisker_gt_seg04/whiskerpad_sc014_0315_001_TopCam0_seg04_493300_493931.json",
-        gt=None, side_faces={"left": "left", "right": "right"}, n_frames=631),
+        gt=f"{_E}/whisker_gt_seg04/sc014_0315_001_TopCam0_seg04_493300_493931_updated_edited.parquet",
+        side_faces={"left": "left", "right": "right"}, n_frames=634),
     "longclip": dict(
         kind="autoref",
         combined=f"{_E}/whisker_longclip/sc013_longclip.parquet",

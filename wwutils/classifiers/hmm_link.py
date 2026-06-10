@@ -520,6 +520,12 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     return combined, apply_hmm_identity(combined, hmm)
 
 
+def _default_coverage_path():
+    """Path to the shipped production coverage model, if present."""
+    p = os.path.join(os.path.dirname(__file__), "models", "coverage.joblib")
+    return p if os.path.exists(p) else None
+
+
 def _maybe_load(path):
     """Lazily load a joblib model bundle; return None on any failure (fall back)."""
     if not path or not os.path.exists(path):
@@ -558,7 +564,10 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     combined, out = backbone
 
     # --- COVERAGE: learned real-vs-noise selection (add-on) OR hand-tuned filters ---
-    cov_bundle = _maybe_load(coverage_model_path) if coverage_mode in ("model", "hybrid") else None
+    if coverage_mode in ("model", "hybrid"):
+        cov_bundle = _maybe_load(coverage_model_path or _default_coverage_path())
+    else:
+        cov_bundle = None
     if cov_bundle is not None:
         from . import coverage_model as _cov
         if coverage_mode == "hybrid" and length_min_frac:
@@ -593,11 +602,17 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
             print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
 
     # --- IDENTITY: learned conservative re-ranker (add-on) ---
-    id_bundle = _maybe_load(identity_model_path) if identity_mode == "rerank" else None
-    if id_bundle is not None:
+    # "rerank" loads a pre-trained per-session model; "bootstrap" trains one on this clip's
+    # own HMM-confident runs (no labels) -- the self-contained deployment path.
+    if identity_mode in ("rerank", "bootstrap"):
         from . import identity_model as _idm
-        out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces)
-        print("[hmm_link] identity re-ranker applied.")
+        if identity_mode == "bootstrap":
+            id_bundle = _idm.train_identity(out, gt=None)
+        else:
+            id_bundle = _maybe_load(identity_model_path)
+        if id_bundle is not None and id_bundle.get("models"):
+            out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces)
+            print(f"[hmm_link] identity re-ranker applied ({identity_mode}).")
 
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
