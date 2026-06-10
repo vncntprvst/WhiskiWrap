@@ -1,0 +1,142 @@
+"""IDENTITY model: a per-session, conservative learned re-ranker (close-whisker fix).
+
+Identity is session-specific (which whisker is "id4" depends on this session's pad), so a
+frozen classifier cannot transfer. This trains a tiny per-side model on that session's
+labels (GT when available, else the whisk-HMM's confident runs as pseudo-labels) keyed on
+the stable signatures the position-only linker ignores -- chiefly LENGTH and base shape --
+and uses it only as a re-ranker.
+
+It NEVER re-derives identity from per-frame position rank (that flickers). It resolves each
+side by a forward one-whisker-per-frame Hungarian assignment whose cost blends: (i) a strong
+prior to keep the whisk-HMM identity, (ii) follicle continuity from the previous assigned
+frame, and (iii) the learned class probability. The model only overrides the HMM when its
+evidence is strong and continuity allows it -- so it cannot do worse than the HMM by much,
+and the benchmark gate enforces no regression.
+"""
+from __future__ import annotations
+
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import linear_sum_assignment
+
+from . import detection_features as dF
+from .gt_labels import match_to_gt
+
+try:
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    _SKLEARN = True
+except Exception:  # pragma: no cover
+    _SKLEARN = False
+
+
+def _feat(df: pd.DataFrame, k: int) -> pd.DataFrame:
+    return dF.detection_features(df, k=k)[dF.IDENTITY_FEATURES]
+
+
+def train_identity(linked: pd.DataFrame, *, gt: Optional[pd.DataFrame] = None,
+                   fids: Optional[np.ndarray] = None, k: int = 16,
+                   min_run: int = 5) -> Dict:
+    """Train one per-side identity classifier.
+
+    Labels: if ``gt`` given, match linked->GT to get the true wid (training/eval clip);
+    else bootstrap from ``linked['wid']`` keeping only identities on long stable runs
+    (pseudo-labels from the whisk-HMM). ``fids`` restricts training frames.
+    """
+    if not _SKLEARN:
+        raise ImportError("scikit-learn required for the identity model")
+    df = linked if fids is None else linked[linked["fid"].isin(set(fids))]
+    if gt is not None:
+        lab = match_to_gt(df, gt)
+        lab = lab[lab["is_real"]].copy()
+        lab["y"] = lab["gt_wid"].astype(int)
+    else:
+        lab = df.copy()
+        # keep only long contiguous runs per (side,wid) as confident pseudo-labels
+        keep = []
+        for (_, _), g in lab.groupby(["face_side", "wid"]):
+            g = g.sort_values("fid")
+            runs = np.split(g, np.where(np.diff(g["fid"].values) != 1)[0] + 1)
+            for r in runs:
+                if len(r) >= min_run:
+                    keep.append(r)
+        lab = pd.concat(keep) if keep else lab
+        lab["y"] = lab["wid"].astype(int)
+    models = {}
+    for side, g in lab.groupby("face_side"):
+        classes = sorted(g["y"].unique())
+        if len(classes) < 2:
+            continue
+        clf = HistGradientBoostingClassifier(max_depth=4, learning_rate=0.1,
+                                             max_iter=300, l2_regularization=1.0,
+                                             early_stopping=True, random_state=0)
+        clf.fit(_feat(g, k), g["y"].to_numpy(int))
+        models[side] = (clf, list(clf.classes_))
+    return {"models": models, "features": dF.IDENTITY_FEATURES, "k": k}
+
+
+def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
+                    w_prior: float = 1.0, w_cont: float = 1.0, w_model: float = 1.2,
+                    cont_scale: float = 30.0) -> pd.DataFrame:
+    """Forward one-per-frame re-assignment per side (no flicker). Schema unchanged."""
+    if out.empty or not bundle.get("models"):
+        return out
+    k = bundle.get("k", 16)
+    res = out.copy()
+    for side, (clf, classes) in bundle["models"].items():
+        s = res[res["face_side"] == side]
+        if s.empty:
+            continue
+        probs = clf.predict_proba(_feat(s, k))            # [n, C] aligned to s
+        prob_by_idx = {idx: probs[i] for i, idx in enumerate(s.index)}
+        cls_pos = {c: j for j, c in enumerate(classes)}
+        last_fol: Dict[int, Optional[np.ndarray]] = {c: None for c in classes}
+        for fid in sorted(s["fid"].unique()):
+            fr = s[s["fid"] == fid]
+            idxs = list(fr.index)
+            C = np.zeros((len(idxs), len(classes)))
+            for r, idx in enumerate(idxs):
+                p = prob_by_idx[idx]
+                cur = int(res.at[idx, "wid"])
+                fol = np.array([res.at[idx, "follicle_x"], res.at[idx, "follicle_y"]], float)
+                for jc, c in enumerate(classes):
+                    prior = 0.0 if cur == c else 1.0
+                    model = 1.0 - float(p[cls_pos[c]])
+                    if last_fol[c] is None:
+                        cont = 0.0
+                    else:
+                        cont = min(np.hypot(*(fol - last_fol[c])) / cont_scale, 2.0)
+                    C[r, jc] = w_prior * prior + w_model * model + w_cont * cont
+            ri, ci = linear_sum_assignment(C)
+            for r, jc in zip(ri, ci):
+                idx = idxs[r]; c = classes[jc]
+                res.at[idx, "wid"] = c
+                last_fol[c] = np.array([res.at[idx, "follicle_x"],
+                                        res.at[idx, "follicle_y"]], float)
+    return res
+
+
+def save_identity(bundle, path):
+    import joblib; joblib.dump(bundle, path)
+
+
+if __name__ == "__main__":  # standalone identity eval, contiguous holdout
+    import os, warnings; warnings.filterwarnings("ignore")
+    from . import benchmark_linking as bl
+    from . import eval_linking as ev
+    OUT = r"E:/Thigmotaxis/_autotune"
+    # train on the baseline-linked output of [0,3000), score rerank on [3000,4000)
+    base_pred = os.path.join(OUT, "pred_sc013_active_baseline.parquet")
+    linked = pd.read_parquet(base_pred)
+    gt = pd.read_parquet(bl.CLIPS["sc013_active"]["gt"])
+    b = train_identity(linked, gt=gt, fids=np.arange(0, 3000))
+    print("identity models per side:", {s: m[1] for s, m in b["models"].items()})
+    te = linked[(linked.fid >= 3000) & (linked.fid < 4000)]
+    gte = gt[(gt.fid >= 3000) & (gt.fid < 4000)]
+    before = ev.compute_metrics(te, gte)["overall"]
+    re = rerank_identity(te, b)
+    after = ev.compute_metrics(re, gte)["overall"]
+    for tag, o in (("before", before), ("after ", after)):
+        print(f"{tag}: ida={o['identity_accuracy']:.4f} idsw={o['total_id_switches']} "
+              f"idf1={o['idf1']:.4f} mismatch={o['mismatch']}")

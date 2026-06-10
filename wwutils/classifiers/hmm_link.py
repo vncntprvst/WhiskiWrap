@@ -489,27 +489,18 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     return out
 
 
-def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
-                      side_faces: Dict[str, str], whiskerpad=None,
-                      n_per_side: Optional[Dict[str, int]] = None,
-                      output_path: Optional[str] = None,
-                      follicle_gate_frac: float = 0.15, follicle_max_dist: Optional[float] = None,
-                      length_min_frac: float = 0.4, bridge_max_gap: int = 20,
-                      angle_outlier_k: float = 4.0, **classify_kw) -> Optional[str]:
-    """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
-
-    ``side_faces`` maps face side -> the ``--face`` argument used at trace time
-    (e.g. {"left": "left", "right": "right"}). ``whiskerpad`` (JSON path or dict)
-    supplies per-side crop offsets so cropped measurement coordinates align with
-    the full-frame combined parquet. Writes ``*_updated.parquet`` (or
-    ``output_path``) and returns its path.
-    """
+def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
+                 whiskerpad=None, n_per_side=None, **classify_kw):
+    """Run the whisk-HMM backbone (classify+reclassify per chunk, stitch, join) and
+    return ``(combined_df, out_df)`` where ``out`` is post-``apply_hmm_identity`` (the raw
+    candidate labeling, before any coverage filtering / identity re-rank). Returns None if
+    no identities were produced. Exposed so the autotune loop can cache this expensive step
+    once and apply learned add-ons offline."""
     combined = pd.read_parquet(combined_parquet)
     if n_per_side is None:
         n_per_side = estimate_n_per_side(combined)
     offsets = _side_offsets(whiskerpad) if whiskerpad is not None else {}
     print(f"[hmm_link] whiskers per side: {n_per_side}")
-
     hmm_parts = []
     base = 0
     for side in sorted(side_faces):
@@ -526,31 +517,88 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     if not hmm_parts:
         return None
     hmm = pd.concat(hmm_parts, ignore_index=True)
+    return combined, apply_hmm_identity(combined, hmm)
 
-    out = apply_hmm_identity(combined, hmm)
-    if length_min_frac:
+
+def _maybe_load(path):
+    """Lazily load a joblib model bundle; return None on any failure (fall back)."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        import joblib
+        return joblib.load(path)
+    except Exception as exc:  # pragma: no cover
+        print(f"[hmm_link] could not load model {path} ({exc}); using default path.")
+        return None
+
+
+def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
+                      side_faces: Dict[str, str], whiskerpad=None,
+                      n_per_side: Optional[Dict[str, int]] = None,
+                      output_path: Optional[str] = None,
+                      follicle_gate_frac: float = 0.15, follicle_max_dist: Optional[float] = None,
+                      length_min_frac: float = 0.4, bridge_max_gap: int = 20,
+                      angle_outlier_k: float = 4.0,
+                      coverage_mode: str = "filters", identity_mode: str = "off",
+                      coverage_model_path: Optional[str] = None,
+                      identity_model_path: Optional[str] = None,
+                      **classify_kw) -> Optional[str]:
+    """End-to-end HMM linking: estimate N, reclassify chunks, stitch, join, save.
+
+    ``side_faces`` maps face side -> the ``--face`` argument used at trace time
+    (e.g. {"left": "left", "right": "right"}). ``whiskerpad`` (JSON path or dict)
+    supplies per-side crop offsets so cropped measurement coordinates align with
+    the full-frame combined parquet. Writes ``*_updated.parquet`` (or
+    ``output_path``) and returns its path.
+    """
+    backbone = hmm_backbone(combined_parquet, wt_dir, base_name, side_faces,
+                            whiskerpad=whiskerpad, n_per_side=n_per_side, **classify_kw)
+    if backbone is None:
+        return None
+    combined, out = backbone
+
+    # --- COVERAGE: learned real-vs-noise selection (add-on) OR hand-tuned filters ---
+    cov_bundle = _maybe_load(coverage_model_path) if coverage_mode in ("model", "hybrid") else None
+    if cov_bundle is not None:
+        from . import coverage_model as _cov
+        if coverage_mode == "hybrid" and length_min_frac:
+            out = filter_length_outliers(out, length_min_frac)
+        gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
         before = len(out)
-        out = filter_length_outliers(out, length_min_frac)
-        print(f"[hmm_link] length-outlier filter dropped {before - len(out)} detections.")
-    # Empirical follicle gate (scales with camera/zoom via whisker length).
-    gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
-    print(f"[hmm_link] follicle gate = {gate:.1f} px")
-    # Trust whisk's HMM identity for ambiguity resolution; only *remove* clear
-    # noise (a detection far from its identity's base, e.g. a cotton strand). We do
-    # NOT re-assign identities by position -- that flickers ("christmas tree") and
-    # can invert whole frames, undoing whisk's temporally-modelled identity.
-    before = len(out)
-    out = filter_follicle_outliers(out, gate)
-    print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
-    if bridge_max_gap:
+        out = _cov.apply_coverage_model(out, combined, cov_bundle, side_faces=side_faces, gate_px=gate)
+        print(f"[hmm_link] coverage model: {before} -> {len(out)} detections.")
+    else:
+        if length_min_frac:
+            before = len(out)
+            out = filter_length_outliers(out, length_min_frac)
+            print(f"[hmm_link] length-outlier filter dropped {before - len(out)} detections.")
+        # Empirical follicle gate (scales with camera/zoom via whisker length).
+        gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
+        print(f"[hmm_link] follicle gate = {gate:.1f} px")
+        # Trust whisk's HMM identity for ambiguity resolution; only *remove* clear
+        # noise (a detection far from its identity's base, e.g. a cotton strand). We do
+        # NOT re-assign identities by position -- that flickers ("christmas tree") and
+        # can invert whole frames, undoing whisk's temporally-modelled identity.
         before = len(out)
-        out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
-                          min_length_frac=length_min_frac or 0.4)
-        print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
-    if angle_outlier_k:
-        before = len(out)
-        out = filter_angle_outliers(out, angle_k=angle_outlier_k)
-        print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
+        out = filter_follicle_outliers(out, gate)
+        print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
+        if bridge_max_gap:
+            before = len(out)
+            out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
+                              min_length_frac=length_min_frac or 0.4)
+            print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
+        if angle_outlier_k:
+            before = len(out)
+            out = filter_angle_outliers(out, angle_k=angle_outlier_k)
+            print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
+
+    # --- IDENTITY: learned conservative re-ranker (add-on) ---
+    id_bundle = _maybe_load(identity_model_path) if identity_mode == "rerank" else None
+    if id_bundle is not None:
+        from . import identity_model as _idm
+        out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces)
+        print("[hmm_link] identity re-ranker applied.")
+
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
     out.to_parquet(output_path)
