@@ -88,9 +88,52 @@ Key parameters:
 * `chunk_sz_frames` — frames per chunk; ideally `epoch_sz_frames / (N * n_trace_processes)`.
 * `measure=True`, `face='left'|'right'` — also run `measure` for the given face side.
 
-## Notes
+## Whisker linking & the learned add-on
 
-* whisk identity classification (`classify`/HMM reclassify) operates **within a
-  video**. Preserving whisker identity **across chunks and across a whole
-  session** is handled by a separate linking step (see the project pipeline /
-  the linker module); this is being consolidated into WhiskiWrap.
+whisk identity classification (`classify`/HMM reclassify) only operates **within
+a chunk**. Preserving whisker identity **across chunks and across a whole
+session** — so each `wid` follows the *same physical whisker* in every frame — is
+handled by the linking step in `wwutils/classifiers/hmm_link.py`
+(`link_whiskers_hmm`): per-side whisk-HMM reclassify → cross-chunk stitch →
+outlier filters.
+
+The HMM linker is solid but hits two ceilings that hand-tuned heuristics can't
+clear: **coverage** (length/follicle/angle filters drop real, still-visible
+whiskers) and **close-whisker identity** (adjacent whiskers swap; they separate
+cleanly by *length*, which the position-keyed linker ignores). The **learned
+add-on** addresses both:
+
+* a **coverage model** — a shipped real-vs-noise classifier
+  (`wwutils/classifiers/models/coverage.joblib`) that replaces the outlier
+  filters and re-admits dropped detections. Real-vs-noise is universal and the
+  features are scale-free, so it is trained once (on two animals, sc013 + seg04)
+  and applied to any clip. Cross-session held-out AP ≈ 0.999.
+* an **identity re-ranker** — a per-clip model (no labels needed: bootstrapped
+  from the HMM's own high-confidence runs) that uses **length** + normalized
+  follicle position to fix close-whisker swaps via a conservative, no-flicker
+  Hungarian re-rank that only overrides the HMM when its margin is large.
+
+### Day-to-day use
+
+The add-on ships with the package and is off by default. To enable it, pass
+`--learned` to the tracking entry point (`whisker_tracking.py` in the
+thigmotaxis repo, or call `link_whiskers_hmm(..., coverage_mode="model",
+identity_mode="bootstrap")` directly):
+
+* **Any new clip:** add `--learned`. Zero-shot it already beats the baseline
+  linker (seg04: missing detections 59 → 20, identity accuracy 0.969 → 0.981) —
+  no per-clip setup.
+* **An important clip you want pristine:** label a few minutes in the GUI, then
+  train a GT-backed identity model for that session — it drives id-switches down
+  hard (seg04 32 → 4). See `identity_model.train_identity(out, gt=...)`.
+* **Tip:** before labeling/seeking in the GUI, run the clip through a
+  re-encode to an all-intra stream (`ffmpeg -i in.mp4 -c:v libx264 -bf 0 -g 1
+  out.mp4`) or trace with `--enhance`. Raw H.264 with B-frames over-reports the
+  frame count and seeks inaccurately, so overlays can drift by a frame or two.
+
+The add-on is additive and schema-preserving: with the flag off, the linker is
+byte-identical to before. Coverage is train-once-ship-everywhere; identity is
+per-session by design.
+
+> **Requires** `scikit-learn` and `joblib` (installed automatically as
+> dependencies). The coverage model is bundled in the wheel.

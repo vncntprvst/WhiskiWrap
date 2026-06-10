@@ -1,3 +1,5 @@
 include WhiskiWrap/*.parameters
 include WhiskiWrap/line.detectorbank
 include WhiskiWrap/halfspace.detectorbank
+include wwutils/classifiers/models/*.joblib
+include wwutils/classifiers/models/*.json

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "WhiskiWrap"
-version = "1.2.5"
+version = "1.2.6"
 description = "Whisk package wrapper created by Chris Rodgers, maintained by Vincent Prevosto"
 readme = "README.md"
 authors = [
@@ -36,6 +36,8 @@ dependencies = [
     "plotly",
     "psutil",
     "cmcrameri",
+    "scikit-learn",
+    "joblib",
 ]
 requires-python = ">=3.10"
 
@@ -44,3 +46,7 @@ Homepage = "http://pypi.python.org/pypi/WhiskiWrap/"
 
 [tool.setuptools.packages.find]
 include = ["WhiskiWrap*", "wwutils*"]
+
+[tool.setuptools.package-data]
+"WhiskiWrap" = ["*.parameters", "*.detectorbank"]
+"wwutils.classifiers" = ["models/*.joblib", "models/*.json"]

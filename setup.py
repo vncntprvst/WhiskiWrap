@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
    name='WhiskiWrap',
-   version='1.2.5',
+   version='1.2.6',
    authors='Chris Rodgers, Ariel Iporre, Vincent Prevosto',
    author_email='',
    maintainer=', '.join(['cxrodgers','aiporre','vncntprvst']),
@@ -32,6 +32,8 @@ setup(
       'plotly',  # Optional, for interactive plotting
       'cmcrameri',  # Optional, for colormaps
       'psutil',  # Optional, for system resource monitoring
+      'scikit-learn',  # Required for the learned coverage/identity add-on
+      'joblib',  # Required to load the shipped coverage model
       ],
    python_requires='>=3.10',
    include_package_data=True,
