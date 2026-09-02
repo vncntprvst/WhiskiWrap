@@ -351,6 +351,13 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         if len(chunk_of_frames) != chunk_size:
             out_of_frames = True
 
+        # Nothing read means nothing new to trace: bail out rather than fall
+        # through to `ctw.chunknames_written[-1]`, which would still name the
+        # previous chunk and dispatch it twice. See the longer note in
+        # interleaved_reading_and_tracing_and_measuring.
+        if not chunk_of_frames:
+            break
+
         ## Write tiffs
         # We do this synchronously to ensure that it happens before
         # the trace starts
@@ -629,6 +636,20 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             # Check if we ran out
             if len(chunk_of_frames) != chunk_size:
                 out_of_frames = True
+
+            # Nothing was read, so nothing new will be written. Without this the
+            # loop still falls through to `ctw.chunknames_written[-1]` below, which
+            # then names the PREVIOUS chunk and dispatches it to the trace pool a
+            # second time -- two `trace` processes writing one .whiskers file. The
+            # loser leaves it truncated, so `measure` reads a garbage length field
+            # and dies with "read whisker segments (whiskbin1 format): Out of
+            # memory"; the chunk is dropped and the run still exits 0.
+            #
+            # This only bites when the frame count is an exact multiple of
+            # chunk_size: the last real chunk fills, so out_of_frames stays False
+            # and the loop comes round once more on an empty read.
+            if not chunk_of_frames:
+                break
 
             ## Write tiffs
             # We do this synchronously to ensure that it happens before
