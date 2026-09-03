@@ -29,14 +29,29 @@ except Exception:  # pragma: no cover
     _SKLEARN = False
 
 
-def _features(df: pd.DataFrame, k: int = 16) -> pd.DataFrame:
+def _features(df: pd.DataFrame, k: int = 16, features=None) -> pd.DataFrame:
+    """Feature matrix for the named columns (default: the hand-crafted set).
+
+    A missing column raises rather than being filled or dropped: a bundle trained
+    with the whiskerness features applied to a parquet that lacks them would
+    otherwise score every detection off a silently different feature space.
+    """
+    features = list(features or dF.COVERAGE_FEATURES)
     feats = dF.detection_features(df, k=k)
-    return feats[dF.COVERAGE_FEATURES]
+    for c in features:
+        if c not in feats.columns and c in df.columns:
+            feats[c] = df[c].to_numpy()
+    missing = [c for c in features if c not in feats.columns]
+    if missing:
+        raise KeyError(
+            f"coverage model needs {missing}, which are not on this parquet -- "
+            f"run whiskerness_score.py first, or use a bundle trained without them")
+    return feats[features]
 
 
 def train_coverage(combined: pd.DataFrame, gt: pd.DataFrame, *,
                    fids: Optional[np.ndarray] = None, k: int = 16,
-                   gate_px: float = 12.0) -> Dict:
+                   gate_px: float = 12.0, extra_features=None) -> Dict:
     """Train the real/noise classifier. Labels come from matching combined->GT.
 
     ``fids`` restricts TRAINING frames (held-out frames are excluded to avoid leakage).
@@ -46,7 +61,8 @@ def train_coverage(combined: pd.DataFrame, gt: pd.DataFrame, *,
         raise ImportError("scikit-learn required for the coverage model")
     train = combined if fids is None else combined[combined["fid"].isin(set(fids))]
     labeled = match_to_gt(train, gt, gate_px=gate_px)
-    X = _features(labeled, k=k)
+    feat_names = list(dF.COVERAGE_FEATURES) + list(extra_features or [])
+    X = _features(labeled, k=k, features=feat_names)
     y = labeled["is_real"].to_numpy(int)
     # balance the ~8% positive class
     w = np.where(y == 1, (y == 0).sum() / max((y == 1).sum(), 1), 1.0)
@@ -54,11 +70,12 @@ def train_coverage(combined: pd.DataFrame, gt: pd.DataFrame, *,
                                          max_iter=300, l2_regularization=1.0,
                                          early_stopping=True, random_state=0)
     clf.fit(X, y, sample_weight=w)
-    return {"model": clf, "features": dF.COVERAGE_FEATURES, "k": k,
+    return {"model": clf, "features": feat_names, "k": k,
             "n_train": len(y), "pos_rate": float(y.mean())}
 
 
-def train_coverage_multi(pairs, *, k: int = 16, gate_px: float = 12.0) -> Dict:
+def train_coverage_multi(pairs, *, k: int = 16, gate_px: float = 12.0,
+                         extra_features=None) -> Dict:
     """Train one production coverage model from several clips.
 
     ``pairs`` = list of (combined_df, gt_df). Pooling multiple animals makes the universal
@@ -66,10 +83,11 @@ def train_coverage_multi(pairs, *, k: int = 16, gate_px: float = 12.0) -> Dict:
     """
     if not _SKLEARN:
         raise ImportError("scikit-learn required for the coverage model")
+    feat_names = list(dF.COVERAGE_FEATURES) + list(extra_features or [])
     Xs, ys = [], []
     for comb, gt in pairs:
         labeled = match_to_gt(comb, gt, gate_px=gate_px)
-        Xs.append(_features(labeled, k=k))
+        Xs.append(_features(labeled, k=k, features=feat_names))
         ys.append(labeled["is_real"].to_numpy(int))
     X = pd.concat(Xs, ignore_index=True)
     y = np.concatenate(ys)
@@ -78,13 +96,14 @@ def train_coverage_multi(pairs, *, k: int = 16, gate_px: float = 12.0) -> Dict:
                                          l2_regularization=1.0, early_stopping=True,
                                          random_state=0)
     clf.fit(X, y, sample_weight=w)
-    return {"model": clf, "features": dF.COVERAGE_FEATURES, "k": k,
+    return {"model": clf, "features": feat_names, "k": k,
             "n_train": len(y), "pos_rate": float(y.mean()), "n_clips": len(pairs)}
 
 
 def predict_real(df: pd.DataFrame, bundle: Dict) -> np.ndarray:
     """Return p(real) for each row of ``df``."""
-    X = _features(df, k=bundle.get("k", 16))
+    X = _features(df, k=bundle.get("k", 16),
+                  features=bundle.get("features"))
     return bundle["model"].predict_proba(X)[:, 1]
 
 

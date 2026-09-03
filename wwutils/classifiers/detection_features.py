@@ -30,6 +30,13 @@ import pandas as pd
 # Feature column groups (the models select from these).
 SHAPE_SCALARS: List[str] = ["arc_len", "chord_len", "curviness", "straightness", "n_pts"]
 COVERAGE_FEATURES: List[str] = ["length", "score", "pixel_length"] + SHAPE_SCALARS
+# Optional learned features, present only when whiskerness_score.py has annotated the
+# parquet. Kept out of COVERAGE_FEATURES so existing bundles and un-annotated inputs
+# keep working untouched; opt in by passing extra_features when training.
+# Measured on seg04, held out from the whiskerness model: at the threshold keeping
+# 99% of real whiskers, wness_median admitted 2 noise detections against length's
+# 1161 (0.01% vs 6.13% false-positive rate).
+WHISKERNESS_FEATURES: List[str] = ["wness_median", "wness_frac"]
 IDENTITY_FEATURES: List[str] = [
     "length", "follicle_x_n", "follicle_y_n", "base_angle", "angle",
     "arc_len", "chord_len", "curviness", "straightness",
