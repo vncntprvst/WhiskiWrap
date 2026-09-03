@@ -609,7 +609,14 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     # undifferentiated segments per frame when classify had already narrowed it to
     # three, which is where the spurious extra identities and the unstable whisker
     # count came from.
-    if "label" in combined.columns:
+    # WW_CLASSIFY_FILTER=0 keeps every detection and lets the coverage model and
+    # the per-side count decide instead. Measured against three hand-corrected
+    # hard-case clips: the pipeline missed 40.8% of the whiskers a human labelled,
+    # every one of them traced and then discarded, and 62% of those had been marked
+    # -1 by classify. A signal used as a veto costs more than it earns -- the same
+    # conclusion the whiskerness map forced. The count still comes from the labels,
+    # which is what they are reliably good for.
+    if "label" in combined.columns and os.environ.get("WW_CLASSIFY_FILTER", "1") != "0":
         n_before = len(combined)
         keep = (combined["label"] >= 0).to_numpy()
         # Apply the filter PER (frame, side), not globally, and rescue any group
