@@ -87,14 +87,27 @@ SENSITIVE_PARAMETERS_FILE = os.path.join(DIRECTORY, 'sensitive.parameters')
 HALFSPACE_DB_FILE = os.path.join(DIRECTORY, 'halfspace.detectorbank')
 LINE_DB_FILE = os.path.join(DIRECTORY, 'line.detectorbank')
 
+def _copy_parameters_as_lf(src, dst):
+    """Copy a .parameters file, forcing LF endings.
+
+    whisk's parameter parser is line-oriented and takes a trailing CR as part of
+    the value, so a CRLF file fails on its first line ("Could not interpret value
+    for SHOW_DEBUG_MESSAGES", at the column of the CR). whisk then discards the
+    whole file and overwrites it with its compiled-in defaults. Nothing downstream
+    reports this -- tracing proceeds on the defaults -- so the file looks honoured
+    while every edit to it is silently a no-op. A checkout on Windows reintroduces
+    CRLF, so normalize on copy rather than trusting the bytes on disk.
+    """
+    with open(src, 'rb') as fh:
+        data = fh.read()
+    with open(dst, 'wb') as fh:
+        fh.write(data.replace(b'\r\n', b'\n'))
+
+
 def copy_parameters_files(target_directory, sensitive=False):
     """Copies in parameters and banks"""
-    if sensitive:
-        shutil.copyfile(SENSITIVE_PARAMETERS_FILE, os.path.join(target_directory,
-            'default.parameters'))
-    else:
-        shutil.copyfile(PARAMETERS_FILE, os.path.join(target_directory,
-            'default.parameters'))
+    src = SENSITIVE_PARAMETERS_FILE if sensitive else PARAMETERS_FILE
+    _copy_parameters_as_lf(src, os.path.join(target_directory, 'default.parameters'))
 
     # Banks are the same regardless
     shutil.copyfile(HALFSPACE_DB_FILE, os.path.join(target_directory,

@@ -1,0 +1,10 @@
+# whisk reads .parameters files with a line-oriented C parser that treats a
+# trailing CR as part of the value. A CRLF checkout makes it reject the file and
+# silently fall back to its compiled-in defaults, so these must stay LF on every
+# platform.
+*.parameters text eol=lf
+
+# Detector banks and other binaries: never touch.
+*.detectorbank binary
+*.whiskers binary
+*.measurements binary
