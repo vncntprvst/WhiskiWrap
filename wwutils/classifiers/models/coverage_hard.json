@@ -1,0 +1,16 @@
+{
+  "features": [
+    "length",
+    "score",
+    "pixel_length",
+    "arc_len",
+    "chord_len",
+    "curviness",
+    "straightness",
+    "n_pts"
+  ],
+  "k": 16,
+  "n_train": 202860,
+  "pos_rate": 0.15987380459430148,
+  "n_clips": 5
+}

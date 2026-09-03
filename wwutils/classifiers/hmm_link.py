@@ -689,7 +689,22 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
 
 
 def _default_coverage_path():
-    """Path to the shipped production coverage model, if present."""
+    """Path to the coverage model to use, if present.
+
+    WW_COVERAGE_MODEL overrides it, by absolute path or by bare filename resolved
+    against models/. That exists so a retrained model can be A/B'd against the
+    shipped one without editing code or swapping files: the shipped
+    coverage.joblib is what every earlier result was produced with, and replacing
+    it in place would make old and new runs quietly incomparable.
+    """
+    env = os.environ.get("WW_COVERAGE_MODEL")
+    if env:
+        cand = env if os.path.isabs(env) else os.path.join(
+            os.path.dirname(__file__), "models", env)
+        if os.path.exists(cand):
+            return cand
+        print(f"[hmm_link] WW_COVERAGE_MODEL={env!r} not found; "
+              f"falling back to the shipped model")
     p = os.path.join(os.path.dirname(__file__), "models", "coverage.joblib")
     return p if os.path.exists(p) else None
 
