@@ -611,12 +611,40 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     # count came from.
     if "label" in combined.columns:
         n_before = len(combined)
-        keep = combined["label"] >= 0
+        keep = (combined["label"] >= 0).to_numpy()
+        # Apply the filter PER (frame, side), not globally, and rescue any group
+        # where classify rejected everything.
+        #
+        # classify occasionally marks every segment on one side of one frame as -1,
+        # including segments 300 px long that are obviously whiskers. Filtering
+        # globally then leaves that side of that frame with nothing to link, and it
+        # surfaces in the labelling GUI as a frame with no labels at all and no
+        # visible cause -- neighbouring frames being fine. Measured on the 840-frame
+        # poke clip: 29 such frames on the left (3.5%) and 7 on the right, every one
+        # with 20-39 candidates available. They are the most expensive frames to
+        # correct by hand, because all three identities must be re-entered.
+        #
+        # A whole side going -1 in a single frame is classify failing, not evidence
+        # that the whiskers left the face -- so keep that group unfiltered and let
+        # the coverage model and the linker judge it.
         if keep.any() and (~keep).any():
+            grp = combined.groupby(["fid", "face_side"]).indices
+            rescued_rows = rescued_groups = 0
+            keep = keep.copy()
+            for _, idx in grp.items():
+                if not keep[idx].any():
+                    keep[idx] = True
+                    rescued_groups += 1
+                    rescued_rows += len(idx)
             combined = combined[keep].copy()
-            print(f"[hmm_link] classify filter: kept {len(combined):,} of {n_before:,} "
-                  f"detections ({100.0*(n_before-len(combined))/n_before:.1f}% marked "
-                  f"'not a whisker' by classify)")
+            msg = (f"[hmm_link] classify filter: kept {len(combined):,} of "
+                   f"{n_before:,} detections "
+                   f"({100.0*(n_before-len(combined))/n_before:.1f}% marked "
+                   f"'not a whisker' by classify)")
+            if rescued_groups:
+                msg += (f"; rescued {rescued_rows:,} in {rescued_groups} frame-sides "
+                        f"where classify rejected everything")
+            print(msg)
         elif not keep.any():
             print("[hmm_link] WARNING: every detection is labelled -1; ignoring the "
                   "classify filter so there is something to link")
