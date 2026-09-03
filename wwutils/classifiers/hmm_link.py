@@ -744,8 +744,15 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         else:
             id_bundle = _maybe_load(identity_model_path)
         if id_bundle is not None and id_bundle.get("models"):
-            out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces)
-            print(f"[hmm_link] identity re-ranker applied ({identity_mode}).")
+            # WW_RERANK_W_ANGLE exists so the angle-continuity term can be A/B'd on a
+            # fixed set of detections: linking is cheap to re-run, tracing is not, and
+            # comparing two full pipeline runs confounds the term with everything else
+            # that differs between them. 0 reproduces the follicle-only behaviour.
+            w_angle = float(os.environ.get("WW_RERANK_W_ANGLE", "1.0"))
+            out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces,
+                                       w_angle=w_angle)
+            print(f"[hmm_link] identity re-ranker applied ({identity_mode}), "
+                  f"w_angle={w_angle}.")
 
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")

@@ -78,8 +78,19 @@ def train_identity(linked: pd.DataFrame, *, gt: Optional[pd.DataFrame] = None,
 
 def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                     w_prior: float = 1.0, w_cont: float = 1.0, w_model: float = 1.2,
-                    cont_scale: float = 30.0) -> pd.DataFrame:
-    """Forward one-per-frame re-assignment per side (no flicker). Schema unchanged."""
+                    cont_scale: float = 30.0,
+                    w_angle: float = 1.0, angle_scale: float = 10.0) -> pd.DataFrame:
+    """Forward one-per-frame re-assignment per side (no flicker). Schema unchanged.
+
+    Continuity is measured on BOTH follicle position and angle. Follicle alone
+    fails exactly where it is needed most: when whisk forks at a whisker crossing
+    it emits two segments sharing one base, so their follicles are 0-1 px apart and
+    the positional term contributes nothing to either candidate. Measured on a poke
+    excerpt, the two distal parts then sat at a stable ~66 deg and ~85 deg while
+    the assignment between them alternated frame to frame -- the ~19 deg jumps that
+    look like identity switches. Angle separates those two candidates cleanly when
+    position cannot.
+    """
     if out.empty or not bundle.get("models"):
         return out
     k = bundle.get("k", 16)
@@ -92,6 +103,8 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
         prob_by_idx = {idx: probs[i] for i, idx in enumerate(s.index)}
         cls_pos = {c: j for j, c in enumerate(classes)}
         last_fol: Dict[int, Optional[np.ndarray]] = {c: None for c in classes}
+        last_ang: Dict[int, Optional[float]] = {c: None for c in classes}
+        has_angle = "angle" in res.columns
         for fid in sorted(s["fid"].unique()):
             fr = s[s["fid"] == fid]
             idxs = list(fr.index)
@@ -100,6 +113,7 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                 p = prob_by_idx[idx]
                 cur = int(res.at[idx, "wid"])
                 fol = np.array([res.at[idx, "follicle_x"], res.at[idx, "follicle_y"]], float)
+                ang = float(res.at[idx, "angle"]) if has_angle else None
                 for jc, c in enumerate(classes):
                     prior = 0.0 if cur == c else 1.0
                     model = 1.0 - float(p[cls_pos[c]])
@@ -107,13 +121,23 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                         cont = 0.0
                     else:
                         cont = min(np.hypot(*(fol - last_fol[c])) / cont_scale, 2.0)
-                    C[r, jc] = w_prior * prior + w_model * model + w_cont * cont
+                    # Angle continuity. Capped like the positional term so a single
+                    # large excursion cannot dominate the assignment, but able to
+                    # separate two candidates that share a follicle.
+                    if ang is None or last_ang[c] is None:
+                        acont = 0.0
+                    else:
+                        acont = min(abs(ang - last_ang[c]) / angle_scale, 2.0)
+                    C[r, jc] = (w_prior * prior + w_model * model
+                                + w_cont * cont + w_angle * acont)
             ri, ci = linear_sum_assignment(C)
             for r, jc in zip(ri, ci):
                 idx = idxs[r]; c = classes[jc]
                 res.at[idx, "wid"] = c
                 last_fol[c] = np.array([res.at[idx, "follicle_x"],
                                         res.at[idx, "follicle_y"]], float)
+                if has_angle:
+                    last_ang[c] = float(res.at[idx, "angle"])
     return res
 
 
