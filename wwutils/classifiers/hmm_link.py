@@ -75,12 +75,33 @@ def read_measurements(meas_path: str) -> pd.DataFrame:
 # N estimation
 # --------------------------------------------------------------------------- #
 def estimate_n_per_side(df: pd.DataFrame, *, length_frac: float = 0.5,
-                        min_frame_ratio: float = 0.5) -> Dict[str, int]:
+                        min_frame_ratio: float = 0.5,
+                        rescue_frame_ratio: float = 2.0,   # >1 == off; see below
+                        rescue_peak_frac: float = 0.70,
+                        rescue_peak_q: float = 0.95) -> Dict[str, int]:
     """Estimate the number of whiskers per face side.
 
     A whisker is "real" if, among detections longer than ``length_frac`` x the
     longest median length, it appears in at least ``min_frame_ratio`` of frames.
     Falls back to the median per-frame count of long detections.
+
+    RESCUE PASS -- OFF BY DEFAULT, and it should stay off until the premise below
+    is fixed. Set ``rescue_frame_ratio`` <= 1 to enable it.
+
+    The motivating problem is real: on a poke clip the anterior whisker on the
+    right reached 153 px but had a median of 60 px against a 95 px threshold, so
+    the side was scored 2 while three whiskers were visible. Rescuing labels whose
+    upper-quantile length is long does fix that case.
+
+    But it over-counts, because the premise is wrong. ``wid`` here is a per-chunk
+    label, not a persistent identity: across frames one label covers a full shaft
+    in some and a 36 px fur stub in others. On a baseline clip five labels persist
+    across a side that has only three long whiskers, and the rescue promoted a
+    fourth. Counting labels is not counting whiskers, so no threshold on a
+    per-label length statistic can be trusted -- the animal has three long
+    whiskers per side and the estimate must land on three.
+
+    Use ``n_per_side`` (whisker_tracking.py --n-whiskers) when the count is known.
     """
     out: Dict[str, int] = {}
     for side, g in df.groupby("face_side"):
@@ -91,10 +112,55 @@ def estimate_n_per_side(df: pd.DataFrame, *, length_frac: float = 0.5,
             continue
         nf = gl["fid"].nunique()
         counts = gl.groupby("wid")["fid"].nunique()
-        n = int((counts >= min_frame_ratio * nf).sum())
+        kept = set(counts[counts >= min_frame_ratio * nf].index)
+
+        # --- rescue pass: persistent labels that peak long enough to be a whisker
+        rescued = []
+        if rescue_frame_ratio <= 1.0:
+            med = g.groupby("wid")["length"].median()
+            peak = g.groupby("wid")["length"].quantile(rescue_peak_q)
+            nf_all = g["fid"].nunique()
+            allcnt = g.groupby("wid")["fid"].nunique()
+            peak_thr = peak.max() * rescue_peak_frac
+            for w in med.index:
+                if w in kept:
+                    continue
+                if peak.get(w, 0) > peak_thr and allcnt.get(w, 0) >= rescue_frame_ratio * nf_all:
+                    kept.add(w)
+                    rescued.append(w)
+
+        n = len(kept)
         if n == 0:
             n = int(round(gl.groupby("fid").size().median()))
         out[side] = max(n, 1)
+        if rescued:
+            pk = g.groupby("wid")["length"].quantile(rescue_peak_q)
+            mm = g.groupby("wid")["length"].median()
+            desc = ", ".join(f"wid {w} (median {mm[w]:.0f}px, peak {pk[w]:.0f}px)"
+                             for w in rescued)
+            print(f"[hmm_link] {side}: rescued {len(rescued)} persistent long-peaking "
+                  f"label(s): {desc}")
+
+        # Report near-misses. The median-length test rejects a real whisker that is
+        # only intermittently traced in full: on a poke clip the anterior right
+        # whisker had a median of 60 px against a 95 px threshold while reaching
+        # 150 px in the frames where it was traced whole, so the side was linked
+        # with 2 identities while 3 whiskers were visible. Nothing here can tell
+        # such a whisker from a persistent fur artefact, so say what was discarded
+        # and let the caller override with n_per_side rather than fail silently.
+        gall = g[g["length"] > thr * 0.4]
+        if not gall.empty:
+            allcnt = gall.groupby("wid")["fid"].nunique()
+            persistent = allcnt[allcnt >= min_frame_ratio * df[df["face_side"] == side]["fid"].nunique()]
+            near = [w for w in persistent.index
+                    if w not in counts.index or counts.get(w, 0) < min_frame_ratio * nf]
+            if near:
+                stats = g[g["wid"].isin(near)].groupby("wid")["length"]
+                desc = ", ".join(
+                    f"wid {w} (median {stats.median()[w]:.0f}px, max {stats.max()[w]:.0f}px)"
+                    for w in sorted(near, key=lambda w: -stats.max()[w])[:5])
+                print(f"[hmm_link] {side}: n={out[side]}; rejected but persistent: {desc}"
+                      f"  -- pass n_per_side to override")
     return out
 
 
@@ -489,6 +555,41 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     return out
 
 
+def _n_from_classify_labels(combined, min_frame_frac: float = 0.5) -> Dict[str, int]:
+    """Whiskers per side, taken from the identities classify assigned.
+
+    classify labels each segment -1 (not a whisker) or 0,1,2... (whisker n), and
+    the number of distinct non-negative labels on a side IS its whisker count --
+    already decided using the length and follicle tests it was configured with.
+    Deriving it again from length statistics throws that away and does worse.
+
+    classify numbers its whiskers 0..N-1, so N = max(label) + 1 is its answer --
+    not the number of labels that happen to be common. A whisker that is occluded
+    for part of the clip (by the cuetip, say) still exists; requiring each identity
+    in >=50% of frames dropped exactly that one and returned 2 for a side with 3.
+
+    ``min_frame_frac`` is therefore only used to report thin identities, not to
+    exclude them. Returns {} when there is no usable label column, so the caller
+    can fall back to the older estimate rather than guessing 1.
+    """
+    if "label" not in combined.columns or "face_side" not in combined.columns:
+        return {}
+    out: Dict[str, int] = {}
+    for side, g in combined.groupby("face_side"):
+        w = g[g["label"] >= 0]
+        if w.empty:
+            continue
+        out[side] = int(w["label"].max()) + 1
+        nf = g["fid"].nunique()
+        per_label = w.groupby("label")["fid"].nunique()
+        thin = {int(k): f"{100.0 * v / nf:.0f}%" for k, v in per_label.items()
+                if v < min_frame_frac * nf}
+        if thin:
+            print(f"[hmm_link] {side}: identity present in few frames "
+                  f"(kept anyway -- occlusion is not absence): {thin}")
+    return out
+
+
 def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
                  whiskerpad=None, n_per_side=None, **classify_kw):
     """Run the whisk-HMM backbone (classify+reclassify per chunk, stitch, join) and
@@ -497,8 +598,40 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     no identities were produced. Exposed so the autotune loop can cache this expensive step
     once and apply learned add-ons offline."""
     combined = pd.read_parquet(combined_parquet)
+
+    # Honour whisk's own classification. `label` carries what classify/reclassify
+    # decided: -1 for "traced, but not a whisker" (fur, stubs, noise), 0,1,2... for
+    # whiskers. classify is good at this -- on a poke clip it marked 70-92% of
+    # segments -1 and left exactly the right whiskers, median length 263 px against
+    # 44 px for what it rejected.
+    #
+    # Linking without this filter means reconstructing identity from ~30
+    # undifferentiated segments per frame when classify had already narrowed it to
+    # three, which is where the spurious extra identities and the unstable whisker
+    # count came from.
+    if "label" in combined.columns:
+        n_before = len(combined)
+        keep = combined["label"] >= 0
+        if keep.any() and (~keep).any():
+            combined = combined[keep].copy()
+            print(f"[hmm_link] classify filter: kept {len(combined):,} of {n_before:,} "
+                  f"detections ({100.0*(n_before-len(combined))/n_before:.1f}% marked "
+                  f"'not a whisker' by classify)")
+        elif not keep.any():
+            print("[hmm_link] WARNING: every detection is labelled -1; ignoring the "
+                  "classify filter so there is something to link")
+
     if n_per_side is None:
-        n_per_side = estimate_n_per_side(combined)
+        # Prefer classify's own answer. It assigns identities 0..N-1 per side, and
+        # that count is what it decided after its own length/follicle tests -- on
+        # this clip, 3 per side in every frame. estimate_n_per_side() re-derives a
+        # count from per-label length statistics instead, which is strictly less
+        # informed: run on the same data it returns 2, dropping a real whisker.
+        n_per_side = _n_from_classify_labels(combined)
+        if n_per_side:
+            print(f"[hmm_link] whisker count from classify labels: {n_per_side}")
+        else:
+            n_per_side = estimate_n_per_side(combined)
     offsets = _side_offsets(whiskerpad) if whiskerpad is not None else {}
     print(f"[hmm_link] whiskers per side: {n_per_side}")
     hmm_parts = []

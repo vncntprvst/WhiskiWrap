@@ -646,7 +646,19 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
                     'follicle_y': measurements[measurements_idx][8],
                     'tip_x': measurements[measurements_idx][9],
                     'tip_y': measurements[measurements_idx][10],
-                    'label': 0,
+                    # Column 0 is the whisker identity that classify/reclassify
+                    # wrote: -1 for "not a whisker", 0,1,2... for whiskers. This
+                    # used to be hardcoded to 0, which threw that away -- and it is
+                    # the one thing whisk gets reliably right. On a poke clip the
+                    # .measurements held exactly 3 whiskers in every one of 200
+                    # frames with 89.6% of segments marked -1, while the parquet
+                    # carried 30 undifferentiated segments per frame. Downstream,
+                    # combine_sides then saw a single distinct label and fell back
+                    # to sequential ids ("only 1 frequent IDs available for N
+                    # whiskers"), and hmm_link re-estimated a whisker count that
+                    # classify had already determined correctly.
+                    # read_whisker_data() reads this same column; keep them agreed.
+                    'label': int(measurements[measurements_idx][0]),
                     'face_x': M._measurements.contents.face_x,
                     'face_y': M._measurements.contents.face_y,
                     'face_side': face_side
@@ -667,7 +679,10 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
                     'follicle_y': float(wseg.y[-1]),
                     'tip_x': float(wseg.x[0]),
                     'tip_y': float(wseg.y[0]),
-                    'label': 0,
+                    # No .measurements for this chunk, so no classification exists.
+                    # -1 ("not a whisker") is the honest value: it says unknown
+                    # rather than asserting every segment is whisker 0.
+                    'label': -1,
                     'face_x': 0,
                     'face_y': 0,
                     'face_side': face_side
