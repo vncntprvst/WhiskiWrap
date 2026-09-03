@@ -245,7 +245,7 @@ def trace_chunked_tiffs(input_tiff_directory, h5_filename,
             chunk_start=chunk_start)
 
 def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
-    sensitive=False,
+    sensitive=False, params_override=None,
     chunk_size=200, chunk_name_pattern='chunk%08d.tif',
     stop_after_frame=None, delete_tiffs=True,
     timestamps_filename=None, monitor_video=None,
@@ -263,6 +263,10 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     input_reader : Typically a PFReader or FFmpegReader
     tiffs_to_trace_directory : Location to write the tiffs
+    params_override: {name: value} applied to the parameters file this run
+        copies into its trace directory, e.g. {'MAX_DELTA_ANGLE': 4.0}. An
+        unknown name raises rather than being ignored, because whisk accepts
+        a file with unrecognised parameters without complaint.
     sensitive: if False, use default. If True, lower MIN_SIGNAL
     chunk_size : frames per chunk
     chunk_name_pattern : how to name them
@@ -312,7 +316,8 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
     setup_hdf5(h5_filename, expectedrows, measure=True)
 
     # Copy the parameters files
-    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
+    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive,
+                          params_override=params_override)
 
     ## Set up the worker pool
     # Pool of trace workers
@@ -471,7 +476,7 @@ def interleaved_read_trace_and_measure(input_reader, tiffs_to_trace_directory,
         }
 
 def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
-    sensitive=False,
+    sensitive=False, params_override=None,
     chunk_size=200, chunk_name_pattern='chunk%08d.tif',
     stop_after_frame=None, delete_tiffs=True,
     timestamps_filename=None, monitor_video=None,
@@ -488,6 +493,10 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     input_reader : Typically a PFReader or FFmpegReader
     tiffs_to_trace_directory : Location to write the tiffs
+    params_override: {name: value} applied to the parameters file this run
+        copies into its trace directory, e.g. {'MAX_DELTA_ANGLE': 4.0}. An
+        unknown name raises rather than being ignored, because whisk accepts
+        a file with unrecognised parameters without complaint.
     sensitive: if False, use default. If True, lower MIN_SIGNAL
     chunk_size : frames per chunk
     chunk_name_pattern : how to name them
@@ -556,7 +565,8 @@ def interleaved_split_trace_and_measure(input_reader, tiffs_to_trace_directory,
             initialize_zarr(output_filename, (chunk_size,))
     
     # Copy the parameters files
-    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
+    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive,
+                          params_override=params_override)
 
     trace_pool_results = []
 
@@ -976,7 +986,7 @@ def read_whiskers_measurements(filenames):
 
 
 def interleaved_trace_and_measure(input_reader, tiffs_to_trace_directory,
-    sensitive=False,
+    sensitive=False, params_override=None,
     chunk_size=200, chunk_name_pattern='chunk%08d.tif',
     stop_after_frame=None, delete_tiffs=True,
     timestamps_filename=None, monitor_video=None,
@@ -994,6 +1004,10 @@ def interleaved_trace_and_measure(input_reader, tiffs_to_trace_directory,
 
     input_reader : Typically a PFReader or FFmpegReader
     tiffs_to_trace_directory : Location to write the tiffs
+    params_override: {name: value} applied to the parameters file this run
+        copies into its trace directory, e.g. {'MAX_DELTA_ANGLE': 4.0}. An
+        unknown name raises rather than being ignored, because whisk accepts
+        a file with unrecognised parameters without complaint.
     sensitive: if False, use default. If True, lower MIN_SIGNAL
     chunk_size : frames per chunk
     chunk_name_pattern : how to name them
@@ -1024,7 +1038,8 @@ def interleaved_trace_and_measure(input_reader, tiffs_to_trace_directory,
         return {'output_filename': output_filename}
 
     # Set up parameters file copying
-    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive)
+    copy_parameters_files(tiffs_to_trace_directory, sensitive=sensitive,
+                          params_override=params_override)
     
     # Initialize output tracking
     result_dict = {}

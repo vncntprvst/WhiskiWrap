@@ -87,7 +87,27 @@ SENSITIVE_PARAMETERS_FILE = os.path.join(DIRECTORY, 'sensitive.parameters')
 HALFSPACE_DB_FILE = os.path.join(DIRECTORY, 'halfspace.detectorbank')
 LINE_DB_FILE = os.path.join(DIRECTORY, 'line.detectorbank')
 
-def _copy_parameters_as_lf(src, dst):
+def _apply_parameter_overrides(text, overrides):
+    """Rewrite `KEY   value` lines in a parameters file, keeping comments.
+
+    Raises KeyError for a name that is not in the file: whisk ignores parameters
+    it does not recognise and never says so, so a typo would otherwise read as a
+    setting that silently did nothing -- the exact failure mode that hid the CRLF
+    bug for two full sweeps.
+    """
+    missing = []
+    for key, value in overrides.items():
+        pattern = re.compile(r'^(%s)([ \t]+)(\S+)' % re.escape(key), re.MULTILINE)
+        text, n = pattern.subn(
+            lambda m: '%s%s%s' % (m.group(1), m.group(2), value), text)
+        if n == 0:
+            missing.append(key)
+    if missing:
+        raise KeyError('not parameters of this whisk build: %s' % ', '.join(missing))
+    return text
+
+
+def _copy_parameters_as_lf(src, dst, overrides=None):
     """Copy a .parameters file, forcing LF endings.
 
     whisk's parameter parser is line-oriented and takes a trailing CR as part of
@@ -100,14 +120,24 @@ def _copy_parameters_as_lf(src, dst):
     """
     with open(src, 'rb') as fh:
         data = fh.read()
+    text = data.replace(b'\r\n', b'\n').decode('utf-8', 'replace')
+    if overrides:
+        text = _apply_parameter_overrides(text, overrides)
     with open(dst, 'wb') as fh:
-        fh.write(data.replace(b'\r\n', b'\n'))
+        fh.write(text.encode('utf-8'))
 
 
-def copy_parameters_files(target_directory, sensitive=False):
-    """Copies in parameters and banks"""
+def copy_parameters_files(target_directory, sensitive=False, params_override=None):
+    """Copies in parameters and banks.
+
+    ``params_override`` is a {name: value} mapping applied to the copy, e.g.
+    ``{'MAX_DELTA_ANGLE': 4.0}``. The run directory's file is the one whisk reads,
+    so overriding here is what makes a per-run parameter change possible at all --
+    previously the only way to change anything was to edit the installed package.
+    """
     src = SENSITIVE_PARAMETERS_FILE if sensitive else PARAMETERS_FILE
-    _copy_parameters_as_lf(src, os.path.join(target_directory, 'default.parameters'))
+    _copy_parameters_as_lf(src, os.path.join(target_directory, 'default.parameters'),
+                           overrides=params_override)
 
     # Banks are the same regardless
     shutil.copyfile(HALFSPACE_DB_FILE, os.path.join(target_directory,
