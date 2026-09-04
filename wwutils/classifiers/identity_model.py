@@ -137,6 +137,11 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
             fr = s[s["fid"] == fid]
             idxs = list(fr.index)
             C = np.zeros((len(idxs), len(classes)))
+            # One predict_proba for the whole frame rather than one per candidate
+            # pair. The per-pair version made a 5000-frame clip take longer than a
+            # ten-minute budget -- with n detections and k identities it is n*k
+            # calls per frame, each with its own sklearn overhead.
+            assoc_rows, assoc_at = [], []
             # Typical displacement for THIS frame pair, used to normalise the
             # association features. Computed from each detection's nearest previous
             # identity, which does not depend on the assignment being made -- using
@@ -174,21 +179,22 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                         acont = 0.0
                     else:
                         acont = min(abs(ang - last_ang[c]) / angle_scale, 2.0)
-                    cost = (w_prior * prior + w_model * model
-                            + w_cont * cont + w_angle * acont)
+                    C[r, jc] = (w_prior * prior + w_model * model
+                                + w_cont * cont + w_angle * acont)
                     if aclf is not None and last_fol[c] is not None:
                         tipv = (np.array([res.at[idx, "tip_x"], res.at[idx, "tip_y"]],
                                          float) if has_tip else None)
                         lenv = float(res.at[idx, "length"]) if has_len else 0.0
                         gap = (fid - last_fid[c] - 1) if last_fid[c] is not None else 0
-                        feats = _assoc_features(
+                        assoc_rows.append(_assoc_features(
                             fol, tipv, ang, lenv, cur_rank.get(idx),
                             last_fol[c], last_tip[c], last_ang[c], last_len[c],
-                            last_rank[c], max(gap, 0), med)
-                        psame = float(aclf.predict_proba(
-                            np.asarray(feats, float).reshape(1, -1))[0, 1])
-                        cost += w_assoc * (1.0 - psame)
-                    C[r, jc] = cost
+                            last_rank[c], max(gap, 0), med))
+                        assoc_at.append((r, jc))
+            if assoc_rows:
+                psame = aclf.predict_proba(np.asarray(assoc_rows, float))[:, 1]
+                for (r, jc), ps in zip(assoc_at, psame):
+                    C[r, jc] += w_assoc * (1.0 - float(ps))
             ri, ci = linear_sum_assignment(C)
             for r, jc in zip(ri, ci):
                 idx = idxs[r]; c = classes[jc]
