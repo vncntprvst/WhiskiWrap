@@ -775,7 +775,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       length_min_frac: float = 0.4, bridge_max_gap: int = 20,
                       angle_outlier_k: float = 4.0,
                       coverage_mode: str = "filters", identity_mode: str = "off",
-                      classify_filter: bool = True,
+                      classify_filter: bool = True, follicle_snap: bool = True,
                       coverage_model_path: Optional[str] = None,
                       identity_model_path: Optional[str] = None,
                       **classify_kw) -> Optional[str]:
@@ -845,6 +845,13 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
                           min_length_frac=length_min_frac or 0.4)
         print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
+
+    # --- BASE RECONSTRUCTION for paw-occluded whiskers ---
+    # Adds base_occluded + follicle_snap_x/y; follicle_x/y are left untouched.
+    # Runs after bridging so the detections it rescued are covered too.
+    if follicle_snap:
+        from .follicle_snap import add_follicle_snap
+        out = add_follicle_snap(out, verbose=True)
 
     # --- IDENTITY: learned conservative re-ranker (add-on) ---
     # "rerank" loads a pre-trained per-session model; "bootstrap" trains one on this clip's
