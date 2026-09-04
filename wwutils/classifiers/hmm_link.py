@@ -805,10 +805,31 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
             # comparing two full pipeline runs confounds the term with everything else
             # that differs between them. 0 reproduces the follicle-only behaviour.
             w_angle = float(os.environ.get("WW_RERANK_W_ANGLE", "1.0"))
+            # Optional learned association cost. WW_ASSOC_MODEL points at a bundle
+            # from association_model.py; without it the re-ranker behaves exactly
+            # as before.
+            _assoc = None
+            _ap = os.environ.get("WW_ASSOC_MODEL")
+            if _ap and not os.path.isabs(_ap):
+                # bare filename resolves against models/, like WW_COVERAGE_MODEL --
+                # an absolute host path is not necessarily visible inside a
+                # container, which is exactly how the first A/B silently did nothing
+                _ap = os.path.join(os.path.dirname(__file__), "models", _ap)
+            if _ap and os.path.exists(_ap):
+                try:
+                    import joblib
+                    _assoc = joblib.load(_ap)
+                except Exception as exc:                       # noqa: BLE001
+                    print(f"[hmm_link] could not load association model {_ap}: {exc}")
+            elif _ap:
+                print(f"[hmm_link] WW_ASSOC_MODEL={_ap!r} not found; ignoring")
+            _wa = float(os.environ.get("WW_ASSOC_WEIGHT", "2.0"))
             out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces,
-                                       w_angle=w_angle)
+                                       w_angle=w_angle, assoc_bundle=_assoc,
+                                       w_assoc=_wa)
             print(f"[hmm_link] identity re-ranker applied ({identity_mode}), "
-                  f"w_angle={w_angle}.")
+                  f"w_angle={w_angle}"
+                  + (f", learned association w={_wa}" if _assoc else "") + ".")
 
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")

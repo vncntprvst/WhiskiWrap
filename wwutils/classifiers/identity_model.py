@@ -76,10 +76,31 @@ def train_identity(linked: pd.DataFrame, *, gt: Optional[pd.DataFrame] = None,
     return {"models": models, "features": dF.IDENTITY_FEATURES, "k": k}
 
 
+def _assoc_features(fol, tip, ang, length, rank,
+                    last_fol, last_tip, last_ang, last_len, last_rank, gap, med):
+    """Feature row for the learned association model, in its training order.
+
+    Displacements are divided by `med`, the typical whisker displacement between
+    this pair of frames, which is what makes the model portable across frame rates
+    -- it was trained at 200 fps and is used here at 500.
+    """
+    return [
+        float(np.hypot(*(fol - last_fol))) / med,
+        abs(((ang - last_ang + 180) % 360) - 180) if (ang is not None
+                                                      and last_ang is not None) else 0.0,
+        abs(length - last_len) / max(last_len, 1.0) if last_len else 0.0,
+        float(np.hypot(*(tip - last_tip))) / med if (tip is not None
+                                                     and last_tip is not None) else 0.0,
+        abs(rank - last_rank) if (rank is not None and last_rank is not None) else 0.0,
+        float(gap),
+    ]
+
+
 def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                     w_prior: float = 1.0, w_cont: float = 1.0, w_model: float = 1.2,
                     cont_scale: float = 30.0,
-                    w_angle: float = 1.0, angle_scale: float = 10.0) -> pd.DataFrame:
+                    w_angle: float = 1.0, angle_scale: float = 10.0,
+                    assoc_bundle=None, w_assoc: float = 2.0) -> pd.DataFrame:
     """Forward one-per-frame re-assignment per side (no flicker). Schema unchanged.
 
     Continuity is measured on BOTH follicle position and angle. Follicle alone
@@ -104,11 +125,36 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
         cls_pos = {c: j for j, c in enumerate(classes)}
         last_fol: Dict[int, Optional[np.ndarray]] = {c: None for c in classes}
         last_ang: Dict[int, Optional[float]] = {c: None for c in classes}
+        last_tip: Dict[int, Optional[np.ndarray]] = {c: None for c in classes}
+        last_len: Dict[int, float] = {c: 0.0 for c in classes}
+        last_rank: Dict[int, Optional[int]] = {c: None for c in classes}
+        last_fid: Dict[int, Optional[int]] = {c: None for c in classes}
+        has_tip = "tip_x" in res.columns and "tip_y" in res.columns
+        has_len = "length" in res.columns
+        aclf = assoc_bundle["model"] if assoc_bundle else None
         has_angle = "angle" in res.columns
         for fid in sorted(s["fid"].unique()):
             fr = s[s["fid"] == fid]
             idxs = list(fr.index)
             C = np.zeros((len(idxs), len(classes)))
+            # Typical displacement for THIS frame pair, used to normalise the
+            # association features. Computed from each detection's nearest previous
+            # identity, which does not depend on the assignment being made -- using
+            # the assignment itself would be circular.
+            med = 1.0
+            if aclf is not None:
+                dmins = []
+                for idx in idxs:
+                    f0 = np.array([res.at[idx, "follicle_x"],
+                                   res.at[idx, "follicle_y"]], float)
+                    ds = [float(np.hypot(*(f0 - last_fol[c])))
+                          for c in classes if last_fol[c] is not None]
+                    if ds:
+                        dmins.append(min(ds))
+                if dmins:
+                    med = max(float(np.median(dmins)), 1e-3)
+                cur_rank = {idx: r for r, idx in enumerate(
+                    sorted(idxs, key=lambda i: float(res.at[i, "follicle_y"])))}
             for r, idx in enumerate(idxs):
                 p = prob_by_idx[idx]
                 cur = int(res.at[idx, "wid"])
@@ -128,8 +174,21 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                         acont = 0.0
                     else:
                         acont = min(abs(ang - last_ang[c]) / angle_scale, 2.0)
-                    C[r, jc] = (w_prior * prior + w_model * model
-                                + w_cont * cont + w_angle * acont)
+                    cost = (w_prior * prior + w_model * model
+                            + w_cont * cont + w_angle * acont)
+                    if aclf is not None and last_fol[c] is not None:
+                        tipv = (np.array([res.at[idx, "tip_x"], res.at[idx, "tip_y"]],
+                                         float) if has_tip else None)
+                        lenv = float(res.at[idx, "length"]) if has_len else 0.0
+                        gap = (fid - last_fid[c] - 1) if last_fid[c] is not None else 0
+                        feats = _assoc_features(
+                            fol, tipv, ang, lenv, cur_rank.get(idx),
+                            last_fol[c], last_tip[c], last_ang[c], last_len[c],
+                            last_rank[c], max(gap, 0), med)
+                        psame = float(aclf.predict_proba(
+                            np.asarray(feats, float).reshape(1, -1))[0, 1])
+                        cost += w_assoc * (1.0 - psame)
+                    C[r, jc] = cost
             ri, ci = linear_sum_assignment(C)
             for r, jc in zip(ri, ci):
                 idx = idxs[r]; c = classes[jc]
@@ -138,6 +197,14 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
                                         res.at[idx, "follicle_y"]], float)
                 if has_angle:
                     last_ang[c] = float(res.at[idx, "angle"])
+                if aclf is not None:
+                    if has_tip:
+                        last_tip[c] = np.array([res.at[idx, "tip_x"],
+                                                res.at[idx, "tip_y"]], float)
+                    if has_len:
+                        last_len[c] = float(res.at[idx, "length"])
+                    last_rank[c] = cur_rank.get(idx)
+                    last_fid[c] = int(fid)
     return res
 
 
