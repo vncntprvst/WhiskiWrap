@@ -591,7 +591,8 @@ def _n_from_classify_labels(combined, min_frame_frac: float = 0.5) -> Dict[str, 
 
 
 def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
-                 whiskerpad=None, n_per_side=None, **classify_kw):
+                 whiskerpad=None, n_per_side=None, classify_filter=True,
+                 **classify_kw):
     """Run the whisk-HMM backbone (classify+reclassify per chunk, stitch, join) and
     return ``(combined_df, out_df)`` where ``out`` is post-``apply_hmm_identity`` (the raw
     candidate labeling, before any coverage filtering / identity re-rank). Returns None if
@@ -616,7 +617,10 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     # -1 by classify. A signal used as a veto costs more than it earns -- the same
     # conclusion the whiskerness map forced. The count still comes from the labels,
     # which is what they are reliably good for.
-    if "label" in combined.columns and os.environ.get("WW_CLASSIFY_FILTER", "1") != "0":
+    _cf = os.environ.get("WW_CLASSIFY_FILTER")
+    if _cf is not None:
+        classify_filter = _cf != "0"
+    if "label" in combined.columns and classify_filter:
         n_before = len(combined)
         keep = (combined["label"] >= 0).to_numpy()
         # Apply the filter PER (frame, side), not globally, and rescue any group
@@ -729,6 +733,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                       length_min_frac: float = 0.4, bridge_max_gap: int = 20,
                       angle_outlier_k: float = 4.0,
                       coverage_mode: str = "filters", identity_mode: str = "off",
+                      classify_filter: bool = True,
                       coverage_model_path: Optional[str] = None,
                       identity_model_path: Optional[str] = None,
                       **classify_kw) -> Optional[str]:
@@ -741,7 +746,8 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     ``output_path``) and returns its path.
     """
     backbone = hmm_backbone(combined_parquet, wt_dir, base_name, side_faces,
-                            whiskerpad=whiskerpad, n_per_side=n_per_side, **classify_kw)
+                            whiskerpad=whiskerpad, n_per_side=n_per_side,
+                            classify_filter=classify_filter, **classify_kw)
     if backbone is None:
         return None
     combined, out = backbone
