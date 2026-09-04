@@ -478,11 +478,16 @@ def index_measurements(whiskers, measurements):
     removed_count = measurements_reidx.count(-1)
     print(f"Number of whiskers removed by classify: {removed_count}")
 
-    # Handle missing whiskers (where idx is -1)
-    # valid_indices = [idx for idx in measurements_reidx if idx != -1]
-    # measurements_reindexed = measurements[valid_indices]
-    
-    measurements_reindexed = measurements[measurements_reidx]   
+    # A segment with no measurement must come back as "absent", not as some other
+    # segment's numbers. measurements[measurements_reidx] used to do exactly that:
+    # -1 is a valid index, so every unmatched segment silently took the LAST row of
+    # the file -- a real follicle, tip and angle belonging to a different whisker.
+    # NaN instead, so callers can tell and fall back to the segment's own trace.
+    measurements_reindexed = np.full((len(measurements_reidx), measurements.shape[1]),
+                                     np.nan, dtype=float)
+    found = np.array(measurements_reidx) >= 0
+    if found.any():
+        measurements_reindexed[found] = measurements[np.array(measurements_reidx)[found]]
 
     return measurements_reindexed
 
@@ -532,15 +537,14 @@ def append_whiskers_to_hdf5(whisk_filename, h5_filename, chunk_start, measuremen
         # Also, some whiskers may have been removed.
         # So we need to match wseg.id to measurements[2]
 
-        # First check whether classify was run on the measurements file, by comparing whisker ids in the first frame
-        # of the whiskers dictionary to the whisker ids in the measurements array
 
-        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-        initial_frame_measurements = measurements[:len(wid_from_trace)]
-        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-        if not np.array_equal(wid_from_trace, wid_from_measure):
-            measurements=index_measurements(whiskers,measurements)
+        # Align by (frame, wid) unconditionally. The check this replaces compared
+        # whisker ids on FRAME 0 only, so a file that happened to agree there kept a
+        # silent positional off-by-one on every later frame -- rows whose follicle,
+        # angle and length belong to a different whisker than their trace. Measured
+        # on a WA014 clip: 130 of 640 rows wrong in one chunk, 0 of 1162 in the
+        # other. index_measurements() is a no-op reordering when already aligned.
+        measurements=index_measurements(whiskers,measurements)
             
     # # If this function is called in parallel (or other situations with concurrent access
     # lock the file to ensure exclusive access:
@@ -646,17 +650,26 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
     if measurements_filename is not None:
         M = MeasurementsTable(str(measurements_filename))
         measurements = M.asarray()
-        measurements_idx = 0
-
-        # Check if measurements need to be reindexed
-        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-        initial_frame_measurements = measurements[:len(wid_from_trace)]
-        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-        if not np.array_equal(wid_from_trace, wid_from_measure):
-            measurements = index_measurements(whiskers, measurements)
+        # Pair each traced segment with its measurement by (frame, wid) -- columns
+        # 1 and 2 -- rather than by position in the array.
+        #
+        # The positional walk this replaces assumed the .measurements rows come
+        # back in exactly the whiskers iteration order, and checked that
+        # assumption on frame 0 ONLY. A chunk whose first frame happened to agree
+        # therefore kept a silent off-by-one for every later frame, producing rows
+        # whose follicle/angle/length belong to a different whisker than their
+        # trace. Measured on a WA014 clip: 130 of 640 rows wrong in one chunk and
+        # 0 of 1162 in the other, which is why it looked intermittent.
+        #
+        # index_measurements() was the existing repair path and had its own
+        # version of this: it maps a segment with no measurement to -1 and then
+        # does measurements[-1], which is a valid index, so those segments
+        # silently took the LAST row of the file. A dict lookup makes "absent"
+        # detectable instead.
+        measurement_by_key = {(int(m[1]), int(m[2])): m for m in measurements}
     else:
         measurements = None
+        measurement_by_key = None
 
     # Prepare data for Parquet
     summary_data = []
@@ -669,8 +682,6 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
             # Skip degenerate zero-length segments (no traced points). These occur
             # on low-contrast/noisy frames and would otherwise crash on wseg.x[-1].
             if len(wseg.x) == 0:
-                if measurements is not None:
-                    measurements_idx += 1
                 continue
             whisker_data = {
                 'chunk_start': chunk_start,
@@ -678,17 +689,19 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
                 'wid': wseg.id
             }
 
-            if measurements is not None:
+            meas = (None if measurement_by_key is None
+                    else measurement_by_key.get((int(wseg.time), int(wseg.id))))
+            if meas is not None:
                 whisker_data.update({
-                    'length': measurements[measurements_idx][3],
-                    'score': measurements[measurements_idx][4],
-                    'angle': measurements[measurements_idx][5],
-                    'curvature': measurements[measurements_idx][6],
+                    'length': meas[3],
+                    'score': meas[4],
+                    'angle': meas[5],
+                    'curvature': meas[6],
                     'pixel_length': len(wseg.x),
-                    'follicle_x': measurements[measurements_idx][7],
-                    'follicle_y': measurements[measurements_idx][8],
-                    'tip_x': measurements[measurements_idx][9],
-                    'tip_y': measurements[measurements_idx][10],
+                    'follicle_x': meas[7],
+                    'follicle_y': meas[8],
+                    'tip_x': meas[9],
+                    'tip_y': meas[10],
                     # Column 0 is the whisker identity that classify/reclassify
                     # wrote: -1 for "not a whisker", 0,1,2... for whiskers. This
                     # used to be hardcoded to 0, which threw that away -- and it is
@@ -701,17 +714,19 @@ def append_whiskers_to_parquet(whisk_filename, measurements_filename, parquet_fi
                     # whiskers"), and hmm_link re-estimated a whisker count that
                     # classify had already determined correctly.
                     # read_whisker_data() reads this same column; keep them agreed.
-                    'label': int(measurements[measurements_idx][0]),
+                    'label': int(meas[0]),
                     'face_x': M._measurements.contents.face_x,
                     'face_y': M._measurements.contents.face_y,
                     'face_side': face_side
                 })
-                measurements_idx += 1
             else:
-                # No measurements for this chunk (measure failed / file missing).
-                # Still write the SAME schema as the measured branch (NaN for the
-                # measurement fields) so per-chunk parquets merge without a schema
-                # mismatch; geometry comes straight from the trace.
+                # No measurement for this segment: either the whole chunk lacks a
+                # .measurements file (measure failed / missing), or this one
+                # segment is absent from it. Both take the same fallback: the SAME
+                # schema as the measured branch (NaN for the measurement fields)
+                # so per-chunk parquets merge without a schema mismatch, with the
+                # geometry taken straight from this segment's own trace. Never
+                # another segment's measurement.
                 whisker_data.update({
                     'length': float('nan'),
                     'score': float('nan'),
@@ -868,12 +883,13 @@ def append_whiskers_to_zarr(whisk_filename, zarr_filename, chunk_start, measurem
             measurements = M.asarray()
             measurements_idx = 0
 
-            wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-            initial_frame_measurements = measurements[:len(wid_from_trace)]
-            wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-            if not np.array_equal(wid_from_trace, wid_from_measure):
-                measurements = index_measurements(whiskers, measurements)
+            # Align by (frame, wid) unconditionally. The check this replaces compared
+            # whisker ids on FRAME 0 only, so a file that happened to agree there kept a
+            # silent positional off-by-one on every later frame -- rows whose follicle,
+            # angle and length belong to a different whisker than their trace. Measured
+            # on a WA014 clip: 130 of 640 rows wrong in one chunk, 0 of 1162 in the
+            # other. index_measurements() is a no-op reordering when already aligned.
+            measurements = index_measurements(whiskers, measurements)
 
         # Initialize or open Zarr file
         if not add_to_queue:
@@ -985,12 +1001,13 @@ def write_whiskers_to_tmp(whisk_filename, measurements_filename, chunk_start, fa
             measurements = M.asarray()
             measurements_idx = 0
 
-            wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-            initial_frame_measurements = measurements[:len(wid_from_trace)]
-            wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-            if not np.array_equal(wid_from_trace, wid_from_measure):
-                measurements = index_measurements(whiskers, measurements)
+            # Align by (frame, wid) unconditionally. The check this replaces compared
+            # whisker ids on FRAME 0 only, so a file that happened to agree there kept a
+            # silent positional off-by-one on every later frame -- rows whose follicle,
+            # angle and length belong to a different whisker than their trace. Measured
+            # on a WA014 clip: 130 of 640 rows wrong in one chunk, 0 of 1162 in the
+            # other. index_measurements() is a no-op reordering when already aligned.
+            measurements = index_measurements(whiskers, measurements)
 
         for frame, frame_whiskers in list(whiskers.items()):
             for whisker_id, wseg in list(frame_whiskers.items()):
@@ -1147,15 +1164,14 @@ def read_whisker_data(filename, output_format='dict'):
             print("No measurements file found")
             return None
             
-        # First check whether classify was run on the measurements file, by comparing whisker ids in the first frame of the whiskers dictionary to the whisker ids in the measurements array
 
-        wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-        initial_frame_measurements = measurements[:len(wid_from_trace)]
-        wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-
-        if not np.array_equal(wid_from_trace, wid_from_measure):
-            print("classify was run on the measurements file")
-            measurements=index_measurements(whiskers,measurements)
+        # Align by (frame, wid) unconditionally. The check this replaces compared
+        # whisker ids on FRAME 0 only, so a file that happened to agree there kept a
+        # silent positional off-by-one on every later frame -- rows whose follicle,
+        # angle and length belong to a different whisker than their trace. Measured
+        # on a WA014 clip: 130 of 640 rows wrong in one chunk, 0 of 1162 in the
+        # other. index_measurements() is a no-op reordering when already aligned.
+        measurements=index_measurements(whiskers,measurements)
 
         meas_rows = []
         chunk_start = 0

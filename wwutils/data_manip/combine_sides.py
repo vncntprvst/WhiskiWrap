@@ -237,12 +237,13 @@ def read_whiskers_file(file, side):
         
         # Check if measurements need to be reindexed (similar to append_whiskers_to_parquet)
         if len(whiskers) > 0:
-            wid_from_trace = np.array(list(whiskers[0].keys())).astype(int)
-            initial_frame_measurements = measurements[:len(wid_from_trace)]
-            wid_from_measure = initial_frame_measurements[:, 2].astype(int)
-            
-            if not np.array_equal(wid_from_trace, wid_from_measure):
-                measurements = ww.base.index_measurements(whiskers, measurements)
+            # Align by (frame, wid) unconditionally. The check this replaces compared
+            # whisker ids on FRAME 0 only, so a file that happened to agree there kept a
+            # silent positional off-by-one on every later frame -- rows whose follicle,
+            # angle and length belong to a different whisker than their trace. Measured
+            # on a WA014 clip: 130 of 640 rows wrong in one chunk, 0 of 1162 in the
+            # other. index_measurements() is a no-op reordering when already aligned.
+            measurements = ww.base.index_measurements(whiskers, measurements)
         
         # Prepare data (similar to append_whiskers_to_parquet)
         summary_data = []
