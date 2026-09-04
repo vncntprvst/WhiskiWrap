@@ -822,15 +822,29 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         before = len(out)
         out = filter_follicle_outliers(out, gate)
         print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
-        if bridge_max_gap:
-            before = len(out)
-            out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
-                              min_length_frac=length_min_frac or 0.4)
-            print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
         if angle_outlier_k:
             before = len(out)
             out = filter_angle_outliers(out, angle_k=angle_outlier_k)
             print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
+
+    # --- GAP BRIDGING: applies to BOTH coverage paths ---
+    # This used to sit inside the hand-tuned-filters branch above, so once the
+    # coverage model became the default it stopped running entirely -- silently,
+    # because nothing downstream reports a gap that was never filled. Measured
+    # against 7 hand-corrected clips, restoring it to the model path recovers 352
+    # detections the live pipeline was leaving on the floor, and 395 with the
+    # partial-occlusion rescue.
+    #
+    # It belongs after coverage selection, not instead of it: the coverage model
+    # decides real-vs-noise on a detection's own appearance, while this asks a
+    # different question -- is there an unassigned detection exactly where this
+    # identity must be, given where it was before and after. A whisker the model
+    # rejected for being stubby is precisely the one this should get back.
+    if bridge_max_gap:
+        before = len(out)
+        out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
+                          min_length_frac=length_min_frac or 0.4)
+        print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
 
     # --- IDENTITY: learned conservative re-ranker (add-on) ---
     # "rerank" loads a pre-trained per-session model; "bootstrap" trains one on this clip's
