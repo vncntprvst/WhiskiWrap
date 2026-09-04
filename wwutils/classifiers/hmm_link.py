@@ -507,7 +507,9 @@ def _runs(sorted_vals: List[int]) -> List[List[int]]:
 
 
 def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
-                gate_px: float = 25.0, min_length_frac: float = 0.4) -> pd.DataFrame:
+                gate_px: float = 25.0, min_length_frac: float = 0.4,
+                rescue_length_frac: float = 0.10,
+                rescue_gate_frac: float = 0.32) -> pd.DataFrame:
     """Recover identities for frames where a *visible* whisker was left unclassified.
 
     For each identity, short gaps (<= ``max_gap`` frames) between present frames are
@@ -515,6 +517,33 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     enough whisker near the interpolated follicle position. This recovers whiskers
     that whisk failed to classify (``state = -1``) without inventing a whisker for
     genuinely occluded frames (no suitable detection exists there).
+
+    PARTIAL OCCLUSION
+        A whisker crossed by the cue tip is not gone: it is covered part-way along
+        and still traced, just short. ``min_length_frac`` then rejects it -- the
+        gate excludes the very case this function exists for. Measured against a
+        hand-corrected clip, the whiskers a human had to add back were a median
+        0.35 of their identity's normal length, against 1.00 for the rows the
+        pipeline kept, and 88% of the remaining gaps had a traced candidate sitting
+        unused. So they are found; they are discarded here.
+
+        The rescue is a strict SECOND pass, tried only where the normal rule found
+        nothing. Simply lowering the floor made things worse elsewhere: adoption is
+        greedy on base distance, so a short wrong candidate would win and block the
+        correct longer one, costing 8 real whiskers on a fast-whisking clip. As a
+        fallback it cannot displace anything the current rule would have found.
+
+        The gate for a rescued segment is its BASE position, tightly -- a third of
+        the normal follicle gate, expressed as a fraction because that gate is
+        itself estimated per clip and scales with camera and zoom. The cue tip
+        covers the far end of a whisker, not its root, so a partially occluded
+        whisker's follicle is still visible and lands almost exactly where
+        interpolation predicts -- which is the property that separates it from
+        noise, and the thing the length floor was standing in for.
+
+        Measured over 7 hand-corrected clips: 352 -> 395 detections recovered for
+        14 -> 21 not in the human's labels; on the cue-poke occlusion clip 19 -> 46
+        for one extra. Set ``rescue_length_frac`` to 0 to disable.
     """
     if out.empty:
         return out
@@ -538,13 +567,26 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
                     t = (f - a) / (b - a)
                     ex = fa["follicle_x"] * (1 - t) + fb["follicle_x"] * t
                     ey = fa["follicle_y"] * (1 - t) + fb["follicle_y"] * t
-                    cand = cs[(cs["fid"] == f) & (~cs.index.isin(assigned))
-                              & (cs["length"] >= min_length_frac * med_len)]
-                    if cand.empty:
-                        continue
-                    d = np.hypot(cand["follicle_x"] - ex, cand["follicle_y"] - ey)
-                    if d.min() <= gate_px:
-                        idx = d.idxmin()
+                    free = cs[(cs["fid"] == f) & (~cs.index.isin(assigned))]
+
+                    def _adopt(pool, limit):
+                        if pool.empty:
+                            return None
+                        dd = np.hypot(pool["follicle_x"] - ex,
+                                      pool["follicle_y"] - ey)
+                        if dd.min() > limit:
+                            return None
+                        return dd.idxmin()
+
+                    idx = _adopt(free[free["length"] >= min_length_frac * med_len],
+                                 gate_px)
+                    if idx is None and rescue_length_frac:
+                        # partial occlusion: short, but its base must be where the
+                        # interpolation says (see the note in the docstring)
+                        idx = _adopt(
+                            free[free["length"] >= rescue_length_frac * med_len],
+                            rescue_gate_frac * gate_px)
+                    if idx is not None:
                         row = cs.loc[idx].copy()
                         row["label"] = row["wid"]
                         row["wid"] = int(wid)
