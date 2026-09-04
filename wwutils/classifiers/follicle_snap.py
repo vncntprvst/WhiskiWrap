@@ -48,11 +48,21 @@ WHAT WORKS
     segment and that swings once extrapolated. The tangent is worse again --
     median 2.6 px but p90 7.4 and only 62% within 5 px.
 
-    The cap is 40% hidden. It was set at 30% from the cubic measurements, which
-    was leaving the real cases unfixed -- the paw-occluded whisker this was built
-    for hides a median 36% of its length, so the cap excluded precisely it. Past
-    45% accuracy falls away and the detection is flagged with its follicle left
-    exactly as measured.
+    The cap is on ``missing / retained`` -- how far we extrapolate per unit of
+    visible curve -- rather than on the fraction of the whisker hidden. That is the
+    quantity accuracy actually tracks, and unlike a fraction-hidden cap it behaves
+    the same across animals:
+
+        ratio <= 0.50    median 1.2-2.1 px    100% within 10 px
+        ratio 0.50-0.75  median 1.9-3.0       98-100% within 10 px
+        ratio 0.75-1.00  median 3.7-4.4       74-97% within 10 px
+        ratio > 1.00     median 3.6-10.4      47-96% within 10 px
+
+    0.75 is where every animal is still at 98%+; past 1.0 WA012 falls to 47% while
+    WA015 is still at 96%, so a fraction-hidden cap tuned on one animal would be
+    wrong for another. Beyond the cap the detection is flagged and its follicle
+    left exactly as measured -- the trace, and so the angle, is still good, and is
+    the reason such a detection is worth keeping rather than deleting.
 
 WHAT IS WRITTEN
     Three columns, and ``follicle_x``/``follicle_y`` are never modified:
@@ -74,7 +84,7 @@ import pandas as pd
 WINDOW = 401           # frames; must outlast a resting paw
 MIN_DEV_PX = 20.0      # floor for "displaced", from measured base stability
 DEV_K = 4.0            # ... or this many times the identity's own median deviation
-MAX_MISSING_FRAC = 0.40
+MAX_EXTRAP_RATIO = 0.75   # missing / retained arclength
 FIT_POINTS = 40
 
 
@@ -175,7 +185,7 @@ def reference_from(df: pd.DataFrame, min_dev_px: float = MIN_DEV_PX
 
 def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
                       min_dev_px: float = MIN_DEV_PX, dev_k: float = DEV_K,
-                      max_missing_frac: float = MAX_MISSING_FRAC,
+                      max_extrap_ratio: float = MAX_EXTRAP_RATIO,
                       reference: Optional[dict] = None,
                       verbose: bool = False) -> pd.DataFrame:
     """Add ``base_occluded`` and ``follicle_snap_x/y``. Never alters follicle_x/y.
@@ -235,8 +245,9 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
                 continue
             out.at[idx, "base_occluded"] = True
             n_flag += 1
-            missing = exp_len - float(lengths[pos])
-            if missing <= 0 or missing > max_missing_frac * exp_len:
+            retained = float(lengths[pos])
+            missing = exp_len - retained
+            if missing <= 0 or missing > max_extrap_ratio * max(retained, 1e-6):
                 continue                     # nothing to add, or too much to invent
             px, py = _oriented(np.asarray(g.at[idx, "pixels_x"], float),
                                np.asarray(g.at[idx, "pixels_y"], float),
