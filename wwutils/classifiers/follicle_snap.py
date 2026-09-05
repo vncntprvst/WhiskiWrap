@@ -220,17 +220,24 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
     # is unmoved by one or two of them being displaced, which is the case that
     # matters: on WA015 one whisker is off its base for 67% of a clip and the
     # other three still pin the head.
-    offset = {}
+    # Computed with a join and one grouped median, not `itertuples` over every row.
+    # The loop this replaces built two Python lists per frame and did a dict lookup
+    # per detection: fine on a 300-frame clip, ~12 million iterations on a real
+    # session. Same numbers, same NaN handling (identities absent from `reference`
+    # contribute nothing), just not row at a time.
+    off_x = off_y = None
     if reference:
-        for f, g in out.groupby("fid"):
-            dx, dy = [], []
-            for r in g.itertuples():
-                b = reference.get((r.face_side, int(r.wid)))
-                if b is not None:
-                    dx.append(float(r.follicle_x) - b[0])
-                    dy.append(float(r.follicle_y) - b[1])
-            if dx:
-                offset[int(f)] = (float(np.median(dx)), float(np.median(dy)))
+        ref_df = pd.DataFrame(
+            [(s, int(w), float(v[0]), float(v[1])) for (s, w), v in reference.items()],
+            columns=["face_side", "wid", "_bx", "_by"])
+        tmp = out[["fid", "face_side", "wid", "follicle_x", "follicle_y"]].copy()
+        tmp["wid"] = tmp["wid"].astype(int)
+        tmp = tmp.merge(ref_df, on=["face_side", "wid"], how="left")
+        tmp["_dx"] = tmp["follicle_x"].astype(float) - tmp["_bx"]
+        tmp["_dy"] = tmp["follicle_y"].astype(float) - tmp["_by"]
+        med = tmp.dropna(subset=["_dx"]).groupby("fid")[["_dx", "_dy"]].median()
+        if len(med):
+            off_x, off_y = med["_dx"], med["_dy"]
 
     n_flag = n_snap = 0
     for (side, wid), g in out.groupby(["face_side", "wid"]):
@@ -252,8 +259,14 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             thresh = max(min_dev_px, dev_k * float(ref[3]))
             # the identity's base, moved to where the head is in each frame
             fids = g["fid"].to_numpy()
-            ox = np.array([offset.get(int(t), (0.0, 0.0))[0] for t in fids])
-            oy = np.array([offset.get(int(t), (0.0, 0.0))[1] for t in fids])
+            # reindex, not a dict lookup per frame: this ran once per identity per
+            # frame (~4M lookups on a real session) to build the same two arrays.
+            if off_x is None:
+                ox = np.zeros(len(fids))
+                oy = np.zeros(len(fids))
+            else:
+                ox = off_x.reindex(fids).fillna(0.0).to_numpy()
+                oy = off_y.reindex(fids).fillna(0.0).to_numpy()
             mx = ref[0] + ox
             my = ref[1] + oy
             dev = np.hypot(fx - mx, fy - my)
