@@ -137,11 +137,53 @@ def apply_coverage_model(out: pd.DataFrame, combined: pd.DataFrame, bundle: Dict
     if not admit:
         return kept
 
-    # index combined p(real) once; mark which combined rows are already used
-    comb = combined.copy()
-    comb["_p"] = predict_real(comb, bundle)
     used = set(zip(kept["fid"].astype(int), kept["follicle_x"].round(2),
                    kept["follicle_y"].round(2)))
+
+    # WORK OUT WHICH FRAMES CAN ADMIT ANYTHING BEFORE SCORING ANYTHING.
+    #
+    # p(real) is not cheap: predict_real builds a skeleton descriptor per detection
+    # (a resample and a rotation, one Python call per row), so scoring the whole
+    # combined table means ~23 million of them on a real session -- tens of minutes,
+    # and it was the single largest remaining cost in linking.
+    #
+    # Almost none of it is used. A combined row can only be admitted if it sits in a
+    # frame where some identity has a GAP, and gaps are a few percent of frames. The
+    # gap set is knowable from `kept` alone, so it is computed first and the model
+    # runs only on rows that can actually be consulted. Rows never looked at cannot
+    # change the result, so this is a pure saving rather than an approximation.
+    plans = []          # (side, wid, missing frames, expected x, expected y, med_len)
+    needed = set()
+    for side in kept["face_side"].unique():
+        for wid, g in kept[kept["face_side"] == side].groupby("wid"):
+            g = g.sort_values("fid")
+            fol = g.drop_duplicates("fid").set_index("fid")[["follicle_x", "follicle_y"]]
+            fids = fol.index.to_numpy()
+            if fids.size < 2:
+                continue
+            span = np.arange(int(fids[0]), int(fids[-1]) + 1)
+            missing = span[~np.isin(span, fids)]
+            if missing.size == 0:
+                continue
+            fx = fol["follicle_x"].to_numpy(float)
+            fy = fol["follicle_y"].to_numpy(float)
+            k = np.searchsorted(fids, missing)
+            a, b = fids[k - 1], fids[k]
+            t = (missing - a) / (b - a)
+            plans.append((side, wid, missing,
+                          fx[k - 1] * (1 - t) + fx[k] * t,
+                          fy[k - 1] * (1 - t) + fy[k] * t,
+                          float(g["length"].median())))
+            needed.update((side, int(f)) for f in missing)
+
+    if not needed:
+        return kept
+    keys = pd.MultiIndex.from_arrays([combined["face_side"].to_numpy(),
+                                      combined["fid"].to_numpy().astype(int)])
+    comb = combined[keys.isin(needed)].copy()
+    if comb.empty:
+        return kept
+    comb["_p"] = predict_real(comb, bundle)
     # This admission pass had three separate linear costs stacked inside one loop
     # over EVERY frame of the session, per identity, per side:
     #
@@ -167,47 +209,25 @@ def apply_coverage_model(out: pd.DataFrame, combined: pd.DataFrame, bundle: Dict
     c_fid = comb["fid"].to_numpy()
 
     admitted = []                       # (position in comb, wid)
-    for side in kept["face_side"].unique():
-        for wid, g in kept[kept["face_side"] == side].groupby("wid"):
-            g = g.sort_values("fid")
-            fol = g.drop_duplicates("fid").set_index("fid")[["follicle_x", "follicle_y"]]
-            fids = fol.index.to_numpy()
-            fx = fol["follicle_x"].to_numpy(float)
-            fy = fol["follicle_y"].to_numpy(float)
-            if fids.size < 2:
+    for side, wid, missing, ex_all, ey_all, med_len in plans:
+        for f, ex, ey in zip(missing, ex_all, ey_all):
+            pos = comb_pos.get((side, int(f)))
+            if pos is None:
                 continue
-            med_len = float(g["length"].median())
-
-            # frames strictly inside the identity's span that it does not occupy
-            span = np.arange(int(fids[0]), int(fids[-1]) + 1)
-            missing = span[~np.isin(span, fids)]
-            if missing.size == 0:
+            m = (c_p[pos] >= admit_threshold) & (c_len[pos] >= 0.5 * med_len)
+            if not m.any():
                 continue
-            # bracketing present frames, vectorised
-            k = np.searchsorted(fids, missing)
-            a, b = fids[k - 1], fids[k]
-            t = (missing - a) / (b - a)
-            ex_all = fx[k - 1] * (1 - t) + fx[k] * t
-            ey_all = fy[k - 1] * (1 - t) + fy[k] * t
-
-            for f, ex, ey in zip(missing, ex_all, ey_all):
-                pos = comb_pos.get((side, f))
-                if pos is None:
-                    continue
-                m = (c_p[pos] >= admit_threshold) & (c_len[pos] >= 0.5 * med_len)
-                if not m.any():
-                    continue
-                cand = pos[m]
-                d = np.hypot(c_fx[cand] - ex, c_fy[cand] - ey)
-                j = int(d.argmin())
-                if d[j] > gate_px:
-                    continue
-                p = int(cand[j])
-                key = (int(c_fid[p]), round(float(c_fx[p]), 2), round(float(c_fy[p]), 2))
-                if key in used:
-                    continue
-                admitted.append((p, int(wid)))
-                used.add(key)
+            cand = pos[m]
+            d = np.hypot(c_fx[cand] - ex, c_fy[cand] - ey)
+            j = int(d.argmin())
+            if d[j] > gate_px:
+                continue
+            q = int(cand[j])
+            key = (int(c_fid[q]), round(float(c_fx[q]), 2), round(float(c_fy[q]), 2))
+            if key in used:
+                continue
+            admitted.append((q, int(wid)))
+            used.add(key)
 
     if admitted:
         pos = np.fromiter((p for p, _ in admitted), np.int64, len(admitted))
