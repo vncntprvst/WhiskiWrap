@@ -207,6 +207,31 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
     out["follicle_snap_x"] = out["follicle_x"].astype(float)
     out["follicle_snap_y"] = out["follicle_y"].astype(float)
 
+    # --- per-frame rigid head offset -------------------------------------------
+    # The base of a whisker moves for two quite different reasons: the whole head
+    # shifts, and that one whisker is displaced onto an occluder. Only the second
+    # is what this function is looking for, and a fixed per-identity base cannot
+    # tell them apart -- on an sc012 poke clip the head sat 30-97 px from its
+    # session-wide position for the entire clip and ALL SIX whiskers were flagged
+    # in frames where nothing was covering them.
+    #
+    # The head motion is shared by every identity, so estimate it per frame as the
+    # MEDIAN offset across identities and subtract it. A median over 4-6 whiskers
+    # is unmoved by one or two of them being displaced, which is the case that
+    # matters: on WA015 one whisker is off its base for 67% of a clip and the
+    # other three still pin the head.
+    offset = {}
+    if reference:
+        for f, g in out.groupby("fid"):
+            dx, dy = [], []
+            for r in g.itertuples():
+                b = reference.get((r.face_side, int(r.wid)))
+                if b is not None:
+                    dx.append(float(r.follicle_x) - b[0])
+                    dy.append(float(r.follicle_y) - b[1])
+            if dx:
+                offset[int(f)] = (float(np.median(dx)), float(np.median(dy)))
+
     n_flag = n_snap = 0
     for (side, wid), g in out.groupby(["face_side", "wid"]):
         g = g.sort_values("fid")
@@ -220,15 +245,24 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             continue
 
         ref = (reference or {}).get((side, int(wid)))
+        mx = my = None
         if ref is not None:
-            dev = np.hypot(fx - ref[0], fy - ref[1])
             exp_len = float(ref[2])
             # scale from the reference recording, NOT from `dev` on this clip
             thresh = max(min_dev_px, dev_k * float(ref[3]))
+            # the identity's base, moved to where the head is in each frame
+            fids = g["fid"].to_numpy()
+            ox = np.array([offset.get(int(t), (0.0, 0.0))[0] for t in fids])
+            oy = np.array([offset.get(int(t), (0.0, 0.0))[1] for t in fids])
+            mx = ref[0] + ox
+            my = ref[1] + oy
+            dev = np.hypot(fx - mx, fy - my)
         else:
-            mx = pd.Series(fx).rolling(window, center=True, min_periods=25).median()
-            my = pd.Series(fy).rolling(window, center=True, min_periods=25).median()
-            dev = np.hypot(fx - mx.to_numpy(), fy - my.to_numpy())
+            mx = pd.Series(fx).rolling(window, center=True,
+                                       min_periods=25).median().to_numpy()
+            my = pd.Series(fy).rolling(window, center=True,
+                                       min_periods=25).median().to_numpy()
+            dev = np.hypot(fx - mx, fy - my)
             med_dev = float(np.nanmedian(dev)) if np.isfinite(dev).any() else 0.0
             thresh = max(min_dev_px, dev_k * med_dev)
             # expected full length from the frames whose base is NOT displaced, so
@@ -249,14 +283,28 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             missing = exp_len - retained
             if missing <= 0 or missing > max_extrap_ratio * max(retained, 1e-6):
                 continue                     # nothing to add, or too much to invent
+            # Orient toward the identity's RESTING BASE, not toward this row's own
+            # recorded follicle. Whisk's follicle is simply one end of the traced
+            # segment, and on an occluded whisker it can be the distal one -- in
+            # which case extrapolating "outward from the follicle" runs away from
+            # the face and puts the reconstructed base past the tip. Measured on an
+            # sc012 poke clip before this fix: 196 of 304 reconstructions moved the
+            # base FARTHER from where that whisker's base actually sits.
+            anchor = (mx[pos], my[pos]) if mx is not None else (ref[0], ref[1])
             px, py = _oriented(np.asarray(g.at[idx, "pixels_x"], float),
                                np.asarray(g.at[idx, "pixels_y"], float),
-                               fx[pos], fy[pos])
+                               anchor[0], anchor[1])
             p = extrapolate_base(px, py, missing)
-            if p is not None:
-                out.at[idx, "follicle_snap_x"] = p[0]
-                out.at[idx, "follicle_snap_y"] = p[1]
-                n_snap += 1
+            if p is None:
+                continue
+            # A reconstruction that lands FARTHER from the resting base than the
+            # measured follicle has gone the wrong way. Keep the measurement.
+            if (np.hypot(p[0] - anchor[0], p[1] - anchor[1])
+                    > np.hypot(fx[pos] - anchor[0], fy[pos] - anchor[1])):
+                continue
+            out.at[idx, "follicle_snap_x"] = p[0]
+            out.at[idx, "follicle_snap_y"] = p[1]
+            n_snap += 1
 
     if verbose:
         print(f"[follicle_snap] {n_flag} detections with a displaced base, "
