@@ -551,6 +551,9 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     new_rows = []
     for side in out["face_side"].unique():
         cs = combined[combined["face_side"] == side]
+        # Same O(rows x frames) trap as the identity re-ranker: `cs[cs["fid"] == f]`
+        # per gap frame rescans the whole side. Index once.
+        cs_by_fid = {int(f): g for f, g in cs.groupby("fid", sort=False)}
         for wid, g in out[out["face_side"] == side].groupby("wid"):
             g = g.sort_values("fid")
             present = set(g["fid"].tolist())
@@ -567,7 +570,10 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
                     t = (f - a) / (b - a)
                     ex = fa["follicle_x"] * (1 - t) + fb["follicle_x"] * t
                     ey = fa["follicle_y"] * (1 - t) + fb["follicle_y"] * t
-                    free = cs[(cs["fid"] == f) & (~cs.index.isin(assigned))]
+                    _fr = cs_by_fid.get(int(f))
+                    if _fr is None:
+                        continue
+                    free = _fr[~_fr.index.isin(assigned)]
 
                     def _adopt(pool, limit):
                         if pool.empty:

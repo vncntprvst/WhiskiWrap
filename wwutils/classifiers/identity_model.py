@@ -133,8 +133,13 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
         has_len = "length" in res.columns
         aclf = assoc_bundle["model"] if assoc_bundle else None
         has_angle = "angle" in res.columns
-        for fid in sorted(s["fid"].unique()):
-            fr = s[s["fid"] == fid]
+        # Group once. `s[s["fid"] == fid]` inside the loop builds a boolean mask
+        # over the whole side for every frame, which is O(rows x frames): on a
+        # 123k-frame session with 1.75M rows per side that is ~2e11 comparisons and
+        # it turned linking into an 8-hour serial stage. groupby is one pass.
+        by_fid = {int(f): g for f, g in s.groupby("fid", sort=True)}
+        for fid in sorted(by_fid):
+            fr = by_fid[fid]
             idxs = list(fr.index)
             C = np.zeros((len(idxs), len(classes)))
             # One predict_proba for the whole frame rather than one per candidate
