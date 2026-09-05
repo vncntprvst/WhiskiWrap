@@ -54,14 +54,14 @@ You may also add optional parameters to run the measure command
 * `measure=True` - run measure command, default is False
 * `face='right'` - run measure with face on right side, can also specify to 'left' side
 
-# Installation
+## Installation
 WhiskiWrap is written in Python and relies on `ffmpeg` for reading input videos, `tifffile` for writing tiff stacks, `whisk` for tracing whiskers in the tiff stacks, and `pytables` for creating HDF5 files with all of the results.
 Also make sure that you have installed `ffmpeg-python>=0.2.0`.
 
-## Installing `ffmpeg`
+### Installing `ffmpeg`
 First install [`ffmpeg`](https://www.ffmpeg.org/) and ensure it is available on your system path -- that is, you should be able to type `ffmpeg` in the terminal and it should find it and run it.
 
-## Installing `whisk`
+### Installing `whisk`
 Next install [`whisk`](http://whiskertracking.janelia.org). There are several ways to do this:
 
 1. Download the pre-built binary. This is the easiest path because it doesn't require compiling anything. However, you still need to make a few changes to the Python code that is downloaded in order to make it work with `WhiskiWrap`.
@@ -100,9 +100,9 @@ To build from source:
 13. Test that everything worked by opening python or ipython and running `from whisk import traj, trace`
 14. You need to the binaries to then environmental variables `WHISKPATH` and/or `PATH` 
 
-## Installing Python modules
+### Installing Python modules
 
-### Recommended: Using uv (Modern Python Package Manager)
+#### Recommended: Using uv (Modern Python Package Manager)
 
 The easiest and fastest way to install WhiskiWrap is using [uv](https://docs.astral.sh/uv/), a modern Python package manager. This project now includes a `pyproject.toml` file that makes installation with uv straightforward.
 
@@ -158,7 +158,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 Then you can use WhiskiWrap as described in the examples above.
 
-### Alternative: Using conda (Traditional Method)
+#### Alternative: Using conda (Traditional Method)
 
 If you prefer using conda to manage and install Python modules:
 
@@ -173,3 +173,34 @@ If you prefer using conda to manage and install Python modules:
    ```
 
 Note: When using conda, you should not have anything on your `$PYTHONPATH`, and there shouldn't be any installed modules in your `~/.local`.
+
+## Linters and testing
+
+There are several libraries used to run linters, check documentation, and run tests.
+
+- Please test your changes using the **coverage** library, which will run the tests and log a coverage report:
+
+```bash
+coverage run -m unittest discover && coverage report
+```
+
+- Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
+
+```bash
+interrogate .
+```
+
+- Use **flake8** to check that code is up to standards (no unused imports, etc.):
+```bash
+flake8 .
+```
+
+- Use **black** to automatically format the code into PEP standards:
+```bash
+black .
+```
+
+- Use **isort** to automatically sort import statements:
+```bash
+isort .
+```
