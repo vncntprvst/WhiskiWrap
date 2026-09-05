@@ -39,6 +39,26 @@ def _bin(name: str) -> str:
     return str(whisk.get_whisk_bin_path() / exe)
 
 
+_T0 = [None]
+
+
+def _stage(msg: str) -> None:
+    """Timestamped progress line, FLUSHED.
+
+    Every print in this module was block-buffered: redirected to a file (which is
+    what a batch job is), Python holds ~8 KB before writing, so a run that has been
+    going for an hour shows an empty log and a stage that never reports is
+    indistinguishable from one that is hung. That is precisely how an 8.6 h stall
+    went unnoticed. Timing each stage also means the next regression shows up as a
+    number rather than as a job that mysteriously hits the wall.
+    """
+    import time as _time
+    now = _time.time()
+    if _T0[0] is None:
+        _T0[0] = now
+    print(f"[hmm_link +{now - _T0[0]:7.1f}s] {msg}", flush=True)
+
+
 def _reclassify_workers() -> int:
     """How many chunks to reclassify at once.
 
@@ -166,7 +186,7 @@ def estimate_n_per_side(df: pd.DataFrame, *, length_frac: float = 0.5,
             mm = g.groupby("wid")["length"].median()
             desc = ", ".join(f"wid {w} (median {mm[w]:.0f}px, peak {pk[w]:.0f}px)"
                              for w in rescued)
-            print(f"[hmm_link] {side}: rescued {len(rescued)} persistent long-peaking "
+            _stage(f"{side}: rescued {len(rescued)} persistent long-peaking "
                   f"label(s): {desc}")
 
         # Report near-misses. The median-length test rejects a real whisker that is
@@ -187,7 +207,7 @@ def estimate_n_per_side(df: pd.DataFrame, *, length_frac: float = 0.5,
                 desc = ", ".join(
                     f"wid {w} (median {stats.median()[w]:.0f}px, max {stats.max()[w]:.0f}px)"
                     for w in sorted(near, key=lambda w: -stats.max()[w])[:5])
-                print(f"[hmm_link] {side}: n={out[side]}; rejected but persistent: {desc}"
+                _stage(f"{side}: n={out[side]}; rejected but persistent: {desc}"
                       f"  -- pass n_per_side to override")
     return out
 
@@ -328,6 +348,7 @@ def relabel_side_with_hmm(wt_dir: str, base_name: str, side: str, face: str, n: 
         return (chunk_start, d)
 
     workers = _reclassify_workers()
+    _stage(f"{side}: reclassifying {len(files)} chunks on {workers} worker(s)")
     if workers > 1 and len(files) > 1:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             chunks = list(ex.map(_one, files))
@@ -335,6 +356,7 @@ def relabel_side_with_hmm(wt_dir: str, base_name: str, side: str, face: str, n: 
         chunks = [_one(f) for f in files]
     if not chunks:
         return pd.DataFrame()
+    _stage(f"{side}: reclassify done; stitching {len(chunks)} chunks")
     stitched = stitch_chunk_identities(chunks)
     stitched["face_side"] = side
     return stitched
@@ -752,7 +774,7 @@ def _n_from_classify_labels(combined, min_frame_frac: float = 0.5) -> Dict[str, 
         thin = {int(k): f"{100.0 * v / nf:.0f}%" for k, v in per_label.items()
                 if v < min_frame_frac * nf}
         if thin:
-            print(f"[hmm_link] {side}: identity present in few frames "
+            _stage(f"{side}: identity present in few frames "
                   f"(kept anyway -- occlusion is not absence): {thin}")
     return out
 
@@ -835,11 +857,11 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
         # informed: run on the same data it returns 2, dropping a real whisker.
         n_per_side = _n_from_classify_labels(combined)
         if n_per_side:
-            print(f"[hmm_link] whisker count from classify labels: {n_per_side}")
+            _stage(f"whisker count from classify labels: {n_per_side}")
         else:
             n_per_side = estimate_n_per_side(combined)
     offsets = _side_offsets(whiskerpad) if whiskerpad is not None else {}
-    print(f"[hmm_link] whiskers per side: {n_per_side}")
+    _stage(f"whiskers per side: {n_per_side}")
     hmm_parts = []
     base = 0
     for side in sorted(side_faces):
@@ -847,16 +869,19 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
         part = relabel_side_with_hmm(wt_dir, base_name, side, side_faces[side], n,
                                      coord_offset=offsets.get(side, (0.0, 0.0)), **classify_kw)
         if part.empty:
-            print(f"[hmm_link] {side}: no identities produced.")
+            _stage(f"{side}: no identities produced.")
             continue
         part["gid"] = part["gid"] + base                 # keep sides disjoint
         base += part["gid"].nunique()
         hmm_parts.append(part)
-        print(f"[hmm_link] {side}: {part['gid'].nunique()} whiskers, {len(part)} detections.")
+        _stage(f"{side}: {part['gid'].nunique()} whiskers, {len(part)} detections.")
     if not hmm_parts:
         return None
     hmm = pd.concat(hmm_parts, ignore_index=True)
-    return combined, apply_hmm_identity(combined, hmm)
+    _stage(f"joining {len(hmm)} hmm detections onto {len(combined)} combined rows")
+    joined = apply_hmm_identity(combined, hmm)
+    _stage(f"join produced {len(joined)} rows")
+    return combined, joined
 
 
 def _default_coverage_path():
@@ -874,7 +899,7 @@ def _default_coverage_path():
             os.path.dirname(__file__), "models", env)
         if os.path.exists(cand):
             return cand
-        print(f"[hmm_link] WW_COVERAGE_MODEL={env!r} not found; "
+        _stage(f"WW_COVERAGE_MODEL={env!r} not found; "
               f"falling back to the shipped model")
     p = os.path.join(os.path.dirname(__file__), "models", "coverage.joblib")
     return p if os.path.exists(p) else None
@@ -888,7 +913,7 @@ def _maybe_load(path):
         import joblib
         return joblib.load(path)
     except Exception as exc:  # pragma: no cover
-        print(f"[hmm_link] could not load model {path} ({exc}); using default path.")
+        _stage(f"could not load model {path} ({exc}); using default path.")
         return None
 
 
@@ -912,6 +937,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
     the full-frame combined parquet. Writes ``*_updated.parquet`` (or
     ``output_path``) and returns its path.
     """
+    _stage(f"linking {os.path.basename(combined_parquet)}")
     backbone = hmm_backbone(combined_parquet, wt_dir, base_name, side_faces,
                             whiskerpad=whiskerpad, n_per_side=n_per_side,
                             classify_filter=classify_filter, **classify_kw)
@@ -931,26 +957,26 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
         before = len(out)
         out = _cov.apply_coverage_model(out, combined, cov_bundle, side_faces=side_faces, gate_px=gate)
-        print(f"[hmm_link] coverage model: {before} -> {len(out)} detections.")
+        _stage(f"coverage model: {before} -> {len(out)} detections.")
     else:
         if length_min_frac:
             before = len(out)
             out = filter_length_outliers(out, length_min_frac)
-            print(f"[hmm_link] length-outlier filter dropped {before - len(out)} detections.")
+            _stage(f"length-outlier filter dropped {before - len(out)} detections.")
         # Empirical follicle gate (scales with camera/zoom via whisker length).
         gate = follicle_max_dist if follicle_max_dist else estimate_follicle_gate(out, follicle_gate_frac)
-        print(f"[hmm_link] follicle gate = {gate:.1f} px")
+        _stage(f"follicle gate = {gate:.1f} px")
         # Trust whisk's HMM identity for ambiguity resolution; only *remove* clear
         # noise (a detection far from its identity's base, e.g. a cotton strand). We do
         # NOT re-assign identities by position -- that flickers ("christmas tree") and
         # can invert whole frames, undoing whisk's temporally-modelled identity.
         before = len(out)
         out = filter_follicle_outliers(out, gate)
-        print(f"[hmm_link] follicle-outlier filter dropped {before - len(out)} detections.")
+        _stage(f"follicle-outlier filter dropped {before - len(out)} detections.")
         if angle_outlier_k:
             before = len(out)
             out = filter_angle_outliers(out, angle_k=angle_outlier_k)
-            print(f"[hmm_link] angle-outlier filter dropped {before - len(out)} detections.")
+            _stage(f"angle-outlier filter dropped {before - len(out)} detections.")
 
     # --- GAP BRIDGING: applies to BOTH coverage paths ---
     # This used to sit inside the hand-tuned-filters branch above, so once the
@@ -969,7 +995,7 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
         before = len(out)
         out = bridge_gaps(out, combined, max_gap=bridge_max_gap, gate_px=gate,
                           min_length_frac=length_min_frac or 0.4)
-        print(f"[hmm_link] gap-bridging recovered {len(out) - before} detections.")
+        _stage(f"gap-bridging recovered {len(out) - before} detections.")
 
     # --- BASE RECONSTRUCTION for paw-occluded whiskers ---
     # Adds base_occluded + follicle_snap_x/y; follicle_x/y are left untouched.
@@ -1008,19 +1034,19 @@ def link_whiskers_hmm(combined_parquet: str, wt_dir: str, base_name: str,
                     import joblib
                     _assoc = joblib.load(_ap)
                 except Exception as exc:                       # noqa: BLE001
-                    print(f"[hmm_link] could not load association model {_ap}: {exc}")
+                    _stage(f"could not load association model {_ap}: {exc}")
             elif _ap:
-                print(f"[hmm_link] WW_ASSOC_MODEL={_ap!r} not found; ignoring")
+                _stage(f"WW_ASSOC_MODEL={_ap!r} not found; ignoring")
             _wa = float(os.environ.get("WW_ASSOC_WEIGHT", "2.0"))
             out = _idm.rerank_identity(out, id_bundle, side_faces=side_faces,
                                        w_angle=w_angle, assoc_bundle=_assoc,
                                        w_assoc=_wa)
-            print(f"[hmm_link] identity re-ranker applied ({identity_mode}), "
+            _stage(f"identity re-ranker applied ({identity_mode}), "
                   f"w_angle={w_angle}"
                   + (f", learned association w={_wa}" if _assoc else "") + ".")
 
     out = out.sort_values(["fid", "wid"])
     output_path = output_path or combined_parquet.replace(".parquet", "_updated.parquet")
     out.to_parquet(output_path)
-    print(f"[hmm_link] saved {len(out)} rows to {output_path}")
+    _stage(f"saved {len(out)} rows to {output_path}")
     return output_path
