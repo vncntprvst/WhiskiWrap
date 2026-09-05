@@ -465,33 +465,56 @@ def reassign_by_tracking(df: pd.DataFrame, gate_px: float, max_missed: int = 30)
     """
     if df.empty:
         return df
+    # This walks frames in order and cannot be vectorised across them -- each frame's
+    # prediction depends on the previous one. What it can stop doing is rebuilding
+    # the frame's rows with `sd[sd["fid"] == fid]`, a full boolean scan of the side's
+    # table once per frame, and materialising a pandas Series per matched detection.
+    # Positions are grouped once, and the per-identity state is a small array rather
+    # than dicts of `cen.loc[w]` lookups.
     cen = df.groupby("wid")[["follicle_x", "follicle_y"]].median()
     id_side = df.groupby("wid")["face_side"].first()
-    rows = []
+    fol = df[["follicle_x", "follicle_y"]].to_numpy(float)
+    fid_all = df["fid"].to_numpy()
+    side_all = df["face_side"].to_numpy()
+
+    keep_pos, keep_wid = [], []
     for side in df["face_side"].unique():
         ids = [w for w in cen.index if id_side[w] == side]
         if not ids:
             continue
-        last = {w: cen.loc[w].to_numpy(float) for w in ids}
-        missed = {w: 0 for w in ids}
-        sd = df[df["face_side"] == side]
-        for fid in sorted(sd["fid"].unique()):
-            g = sd[sd["fid"] == fid]
-            G = g[["follicle_x", "follicle_y"]].to_numpy(float)
-            P = np.array([last[w] if missed[w] <= max_missed else cen.loc[w].to_numpy(float)
-                          for w in ids])
+        ids_arr = np.asarray(ids)
+        cen_arr = cen.loc[ids].to_numpy(float)
+        last = cen_arr.copy()
+        missed = np.zeros(len(ids), dtype=int)
+
+        pos = np.flatnonzero(side_all == side)
+        order = np.argsort(fid_all[pos], kind="stable")   # stable: keeps within-frame order
+        pos = pos[order]
+        bounds = np.flatnonzero(np.diff(fid_all[pos])) + 1
+        for grp in np.split(pos, bounds):
+            if grp.size == 0:
+                continue
+            G = fol[grp]
+            P = np.where((missed <= max_missed)[:, None], last, cen_arr)
             D = np.sqrt(((G[:, None, :] - P[None, :, :]) ** 2).sum(-1))
             gi, ci = linear_sum_assignment(D)
-            matched = set()
-            for r, k in zip(gi, ci):
-                if D[r, k] <= gate_px:
-                    w = ids[k]
-                    row = g.iloc[r].copy(); row["wid"] = int(w); rows.append(row)
-                    last[w] = G[r]; missed[w] = 0; matched.add(k)
-            for j, w in enumerate(ids):
-                if j not in matched:
-                    missed[w] += 1
-    return pd.DataFrame(rows)
+            ok = D[gi, ci] <= gate_px
+            if ok.any():
+                mg, mc = gi[ok], ci[ok]
+                keep_pos.append(grp[mg])
+                keep_wid.append(ids_arr[mc])
+                last[mc] = G[mg]
+                missed[mc] = 0
+                unmatched = np.setdiff1d(np.arange(len(ids)), mc, assume_unique=False)
+            else:
+                unmatched = np.arange(len(ids))
+            missed[unmatched] += 1
+
+    if not keep_pos:
+        return pd.DataFrame(columns=df.columns)
+    out = df.iloc[np.concatenate(keep_pos)].copy()
+    out["wid"] = np.concatenate(keep_wid).astype(int)
+    return out
 
 
 def reassign_by_centroid(df: pd.DataFrame, gate_px: float) -> pd.DataFrame:
@@ -504,23 +527,44 @@ def reassign_by_centroid(df: pd.DataFrame, gate_px: float) -> pd.DataFrame:
     """
     if df.empty:
         return df
+    # The per-side identity list and its centroid matrix do not depend on the frame,
+    # but were rebuilt inside the loop: `[w for w in cen.index if id_side[w] == side]`
+    # is a Series lookup per identity per frame, which on a 220k-frame session is
+    # millions of them before any geometry is computed. Hoisted, and the output is
+    # assembled once instead of one Series per matched detection.
     cen = df.groupby("wid")[["follicle_x", "follicle_y"]].median()
     id_side = df.groupby("wid")["face_side"].first()
-    rows = []
-    for (fid, side), g in df.groupby(["fid", "face_side"]):
-        sid_ids = [w for w in cen.index if id_side[w] == side]
-        if not sid_ids:
+    per_side = {}
+    for side in df["face_side"].unique():
+        ids = [w for w in cen.index if id_side[w] == side]
+        if ids:
+            per_side[side] = (np.asarray(ids), cen.loc[ids].to_numpy(float))
+
+    fol = df[["follicle_x", "follicle_y"]].to_numpy(float)
+    groups = df.groupby(["fid", "face_side"], sort=False).indices
+
+    keep_pos, keep_wid = [], []
+    for key in sorted(groups):
+        side = key[1]
+        got = per_side.get(side)
+        if got is None:
             continue
-        C = cen.loc[sid_ids].to_numpy(float)
-        G = g[["follicle_x", "follicle_y"]].to_numpy(float)
+        ids_arr, C = got
+        grp = groups[key]
+        G = fol[grp]
         D = np.sqrt(((G[:, None, :] - C[None, :, :]) ** 2).sum(-1))
         gi, ci = linear_sum_assignment(D)
-        for r, k in zip(gi, ci):
-            if D[r, k] <= gate_px:
-                row = g.iloc[r].copy()
-                row["wid"] = int(sid_ids[k])
-                rows.append(row)
-    return pd.DataFrame(rows)
+        ok = D[gi, ci] <= gate_px
+        if not ok.any():
+            continue
+        keep_pos.append(grp[gi[ok]])
+        keep_wid.append(ids_arr[ci[ok]])
+
+    if not keep_pos:
+        return pd.DataFrame(columns=df.columns)
+    out = df.iloc[np.concatenate(keep_pos)].copy()
+    out["wid"] = np.concatenate(keep_wid).astype(int)
+    return out
 
 
 def _runs(sorted_vals: List[int]) -> List[List[int]]:
