@@ -256,7 +256,8 @@ def _seam_sig(d: pd.DataFrame, which: str, k_pos: int = 25, k_ang: int = 5
     return pd.DataFrame(out).T
 
 
-def _sig_cost(a: dict, b: dict, pos_scale: float, ang_scale: float) -> float:
+def _sig_cost(a: dict, b: dict, pos_scale: float, ang_scale: float,
+              use_angle: bool = True, len_scale: float = 40.0) -> float:
     """Normalised distance between two seam signatures.
 
     Position ALONE cannot separate whiskers on one pad -- their bases sit within a
@@ -266,13 +267,29 @@ def _sig_cost(a: dict, b: dict, pos_scale: float, ang_scale: float) -> float:
     10 px confidence margin, so every seam match there was ambiguous and fell back
     to whole-chunk means. Angle separates them: those same two whiskers sit ~16 deg
     apart.
+
+    ANGLE ONLY APPLIES ACROSS AN ADJACENT SEAM (``use_angle``)
+        Angle continuity is a statement about consecutive frames. Across a gap it
+        says nothing: a whisker sweeping ~2 deg per frame has moved through several
+        hundred degrees over a hundred-frame absence, so a stored angle is not
+        merely stale but arbitrary. Matching a RETURNING whisker on it swapped
+        identities in 2 of 6 seeds of the absence test while the id COUNT stayed
+        correct -- an error no count-based check would have caught.
+
+        So angle discriminates for a track last seen in the immediately preceding
+        chunk; for one returning after an absence it is dropped, and length carries
+        the shape information instead. Position is the quantity that stays valid
+        across a gap.
     """
     d = np.hypot(a["follicle_x"] - b["follicle_x"], a["follicle_y"] - b["follicle_y"])
     c = d / pos_scale
-    if np.isfinite(a.get("angle", np.nan)) and np.isfinite(b.get("angle", np.nan)):
+    if use_angle and np.isfinite(a.get("angle", np.nan)) \
+            and np.isfinite(b.get("angle", np.nan)):
         # wrap to +-180 so a whisker near the +-180 boundary is not seen as far
         da = abs(((a["angle"] - b["angle"] + 180.0) % 360.0) - 180.0)
         c += da / ang_scale
+    elif np.isfinite(a.get("length", np.nan)) and np.isfinite(b.get("length", np.nan)):
+        c += abs(a["length"] - b["length"]) / len_scale
     return float(c)
 
 
@@ -382,10 +399,12 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
             cost = np.empty((len(gids), len(states)), float)
             for gi, g in enumerate(gids):
                 t = tracks[g]
-                ref = t["end"] if t["last"] == ci - 1 else t["mean"]
+                adjacent = (t["last"] == ci - 1)
+                ref = t["end"] if adjacent else t["mean"]
                 for si, st in enumerate(states):
                     cost[gi, si] = _sig_cost(ref, start.loc[st].to_dict(),
-                                             pos_scale, ang_scale)
+                                             pos_scale, ang_scale,
+                                             use_angle=adjacent)
             ri, cix = linear_sum_assignment(cost)
             mapping = {}
             for r, c in zip(ri, cix):
