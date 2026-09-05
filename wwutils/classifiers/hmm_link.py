@@ -21,6 +21,7 @@ import glob
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -36,6 +37,33 @@ def _bin(name: str) -> str:
     import whisk
     exe = name + (".exe" if os.name == "nt" else "")
     return str(whisk.get_whisk_bin_path() / exe)
+
+
+def _reclassify_workers() -> int:
+    """How many chunks to reclassify at once.
+
+    Read from the scheduler rather than guessed: under SLURM the process is bound
+    to `--cpus-per-task` cores, and `os.cpu_count()` reports the whole NODE, so
+    trusting it would oversubscribe an allocation by up to 4x on a shared node.
+    WT_RECLASSIFY_WORKERS overrides for the local case.
+    """
+    env = os.environ.get("WT_RECLASSIFY_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    slurm = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm:
+        try:
+            return max(1, int(slurm))
+        except ValueError:
+            pass
+    try:
+        # the cores this process may actually run on, not the machine's total
+        return max(1, len(os.sched_getaffinity(0)))       # Linux only
+    except AttributeError:
+        return max(1, (os.cpu_count() or 2) // 2)
 
 
 def reclassify_measurements(meas_path: str, face: str, n: int, *,
@@ -273,19 +301,38 @@ def relabel_side_with_hmm(wt_dir: str, base_name: str, side: str, face: str, n: 
     """
     ox, oy = coord_offset
     pattern = os.path.join(wt_dir, f"{base_name}_{side}_*.measurements")
-    chunks = []
+    files = []
     for meas in sorted(glob.glob(pattern)):
         m = re.search(r"_(\d{8})\.measurements$", os.path.basename(meas))
-        if not m:
-            continue
-        chunk_start = int(m.group(1))
+        if m:
+            files.append((int(m.group(1)), meas))
+
+    # Each chunk is two whisk subprocesses against one file, in place, with no
+    # shared state -- so this is embarrassingly parallel, and it was running one
+    # chunk at a time on a 32-core node. A real session has ~1100 chunks per side;
+    # at even half a second each that is ten minutes of a single core while the
+    # rest idle. Threads (not processes) because the time is spent inside
+    # `subprocess.run`, which releases the GIL, and results come back without
+    # pickling a DataFrame per chunk.
+    #
+    # ThreadPoolExecutor.map preserves input order, which matters: stitching walks
+    # chunks in ascending chunk_start and would otherwise stitch them shuffled.
+    def _one(item):
+        chunk_start, meas = item
         reclassify_measurements(meas, face, n, **classify_kw)
         d = read_measurements(meas)
         d = d[d["state"] >= 0].copy()
         d["fid"] = d["fid"] + chunk_start
         d["follicle_x"] = d["follicle_x"] + ox
         d["follicle_y"] = d["follicle_y"] + oy
-        chunks.append((chunk_start, d))
+        return (chunk_start, d)
+
+    workers = _reclassify_workers()
+    if workers > 1 and len(files) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            chunks = list(ex.map(_one, files))
+    else:
+        chunks = [_one(f) for f in files]
     if not chunks:
         return pd.DataFrame()
     stitched = stitch_chunk_identities(chunks)
