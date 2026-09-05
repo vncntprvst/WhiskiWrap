@@ -688,13 +688,34 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     """
     if out.empty:
         return out
+    # Membership is a POSITIONAL BOOLEAN MASK, not a Python set.
+    #
+    # `_fr.index.isin(assigned)` looks like a cheap set test and is not: pandas
+    # builds a hash table over the whole `assigned` collection on every call, and
+    # `assigned` holds every already-linked detection -- over a million of them on
+    # a real session. Called once per gap frame per whisker, that is the same
+    # quadratic shape as the other three stages, just wearing a set.
+    #
+    # Falls back to the original set when `combined` has a non-unique index, since
+    # positions cannot then be recovered from labels.
+    fast = combined.index.is_unique
+    if fast:
+        pos_of = pd.Series(np.arange(len(combined)), index=combined.index)
+        take = pos_of.reindex(out.index)
+        is_assigned = np.zeros(len(combined), dtype=bool)
+        is_assigned[take.dropna().to_numpy(dtype=np.int64)] = True
+        fol_x = combined["follicle_x"].to_numpy(float)
+        fol_y = combined["follicle_y"].to_numpy(float)
+        len_arr = combined["length"].to_numpy(float)
+        pos_groups = combined.groupby(["face_side", "fid"], sort=False).indices
     assigned = set(out.index)
     new_rows = []
+    adopted_pos = []
     for side in out["face_side"].unique():
         cs = combined[combined["face_side"] == side]
         # Same O(rows x frames) trap as the identity re-ranker: `cs[cs["fid"] == f]`
         # per gap frame rescans the whole side. Index once.
-        cs_by_fid = {int(f): g for f, g in cs.groupby("fid", sort=False)}
+        cs_by_fid = None if fast else {int(f): g for f, g in cs.groupby("fid", sort=False)}
         for wid, g in out[out["face_side"] == side].groupby("wid"):
             g = g.sort_values("fid")
             present = set(g["fid"].tolist())
@@ -711,6 +732,34 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
                     t = (f - a) / (b - a)
                     ex = fa["follicle_x"] * (1 - t) + fb["follicle_x"] * t
                     ey = fa["follicle_y"] * (1 - t) + fb["follicle_y"] * t
+
+                    if fast:
+                        fr_pos = pos_groups.get((side, int(f)))
+                        if fr_pos is None:
+                            continue
+                        free_pos = fr_pos[~is_assigned[fr_pos]]
+
+                        def _adopt(cand, limit):
+                            if cand.size == 0:
+                                return None
+                            dd = np.hypot(fol_x[cand] - ex, fol_y[cand] - ey)
+                            k = int(dd.argmin())        # first minimum, as idxmin gave
+                            return None if dd[k] > limit else int(cand[k])
+
+                        pos = _adopt(
+                            free_pos[len_arr[free_pos] >= min_length_frac * med_len],
+                            gate_px)
+                        if pos is None and rescue_length_frac:
+                            # partial occlusion: short, but its base must be where the
+                            # interpolation says (see the note in the docstring)
+                            pos = _adopt(
+                                free_pos[len_arr[free_pos] >= rescue_length_frac * med_len],
+                                rescue_gate_frac * gate_px)
+                        if pos is not None:
+                            adopted_pos.append((pos, int(wid)))
+                            is_assigned[pos] = True
+                        continue
+
                     _fr = cs_by_fid.get(int(f))
                     if _fr is None:
                         continue
@@ -728,8 +777,6 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
                     idx = _adopt(free[free["length"] >= min_length_frac * med_len],
                                  gate_px)
                     if idx is None and rescue_length_frac:
-                        # partial occlusion: short, but its base must be where the
-                        # interpolation says (see the note in the docstring)
                         idx = _adopt(
                             free[free["length"] >= rescue_length_frac * med_len],
                             rescue_gate_frac * gate_px)
@@ -739,7 +786,17 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
                         row["wid"] = int(wid)
                         new_rows.append(row)
                         assigned.add(idx)
-    if new_rows:
+
+    if adopted_pos:
+        pos = np.fromiter((p for p, _ in adopted_pos), dtype=np.int64,
+                          count=len(adopted_pos))
+        wids = np.fromiter((w for _, w in adopted_pos), dtype=np.int64,
+                           count=len(adopted_pos))
+        add = combined.iloc[pos].copy()
+        add["label"] = add["wid"].to_numpy()
+        add["wid"] = wids
+        out = pd.concat([out, add])
+    elif new_rows:
         out = pd.concat([out, pd.DataFrame(new_rows)])
     return out
 
