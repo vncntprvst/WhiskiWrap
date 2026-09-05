@@ -302,22 +302,50 @@ def apply_hmm_identity(combined: pd.DataFrame, hmm: pd.DataFrame, *,
     identity in ``wid`` (raw id preserved in ``label``); unmatched combined rows are
     dropped (they were not assigned an identity by whisk).
     """
-    keep = []
-    for (fid, side), c in combined.groupby(["fid", "face_side"]):
-        h = hmm[(hmm["fid"] == fid) & (hmm["face_side"] == side)]
-        if h.empty:
+    # Two things here were quadratic-ish and both mattered on a real session.
+    #
+    #   * `hmm[(hmm.fid == fid) & (hmm.face_side == side)]` rebuilt a boolean mask
+    #     over the WHOLE hmm table once per (frame, side). At 220k frames that is
+    #     ~440k scans of a million rows. This is the same mistake that made
+    #     rerank_identity an 8-hour stage; `groupby(...).indices` is one pass.
+    #   * Accumulating `c.iloc[r].copy()` built one pandas Series per matched
+    #     detection -- about a million short-lived objects -- before
+    #     `pd.DataFrame(keep)` glued them back together.
+    #
+    # `.indices` gives POSITIONAL arrays, so none of this depends on the frames
+    # carrying a unique or aligned index.
+    if combined.empty or hmm.empty:
+        return pd.DataFrame(columns=combined.columns)
+
+    c_groups = combined.groupby(["fid", "face_side"], sort=False).indices
+    h_groups = hmm.groupby(["fid", "face_side"], sort=False).indices
+    cf = combined[["follicle_x", "follicle_y"]].to_numpy(float)
+    hf = hmm[["follicle_x", "follicle_y"]].to_numpy(float)
+    hgid = hmm["gid"].to_numpy()
+
+    # Sorted key order, because that is what `groupby(...)` iteration gave before
+    # and the output row order is observable downstream.
+    keep_pos, keep_gid = [], []
+    for key in sorted(c_groups):
+        cpos = c_groups[key]
+        hpos = h_groups.get(key)
+        if hpos is None or len(hpos) == 0:
             continue
-        cx = c[["follicle_x", "follicle_y"]].to_numpy(float)
-        hx = h[["follicle_x", "follicle_y"]].to_numpy(float)
+        cx, hx = cf[cpos], hf[hpos]
         dist = np.sqrt(((cx[:, None, :] - hx[None, :, :]) ** 2).sum(-1))
         ci, hi = linear_sum_assignment(dist)
-        for r, k in zip(ci, hi):
-            if dist[r, k] <= gate_px:
-                row = c.iloc[r].copy()
-                row["label"] = row["wid"]
-                row["wid"] = int(h.iloc[k]["gid"])
-                keep.append(row)
-    return pd.DataFrame(keep)
+        ok = dist[ci, hi] <= gate_px
+        if not ok.any():
+            continue
+        keep_pos.append(cpos[ci[ok]])
+        keep_gid.append(hgid[hpos[hi[ok]]])
+
+    if not keep_pos:
+        return pd.DataFrame(columns=combined.columns)
+    out = combined.iloc[np.concatenate(keep_pos)].copy()
+    out["label"] = out["wid"].to_numpy()
+    out["wid"] = np.concatenate(keep_gid).astype(int)
+    return out
 
 
 def _side_offsets(whiskerpad) -> Dict[str, Tuple[float, float]]:
