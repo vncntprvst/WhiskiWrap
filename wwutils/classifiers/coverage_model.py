@@ -142,44 +142,80 @@ def apply_coverage_model(out: pd.DataFrame, combined: pd.DataFrame, bundle: Dict
     comb["_p"] = predict_real(comb, bundle)
     used = set(zip(kept["fid"].astype(int), kept["follicle_x"].round(2),
                    kept["follicle_y"].round(2)))
-    new_rows = []
+    # This admission pass had three separate linear costs stacked inside one loop
+    # over EVERY frame of the session, per identity, per side:
+    #
+    #   for f in range(fmin, fmax + 1):          # ~220k frames x ~9 ids x 2 sides
+    #       lo = fol.index[fol.index < f]        # full scan of the id's frames
+    #       cand = cs[(cs["fid"] == f) & ...]    # full scan of the side's table
+    #
+    # On a real session that is ~4M iterations each rescanning millions of rows,
+    # and it is where the stage sat silently for tens of minutes. All three go
+    # away without changing the result:
+    #
+    #   * only MISSING frames can admit anything, so iterate those, not all frames;
+    #   * the bracketing frames come from searchsorted on an already-sorted index;
+    #   * candidates come from a single positional groupby of `comb` by (side, fid).
+    #
+    # `used` stays a Python set of (fid, x, y) -- that lookup was already O(1); it
+    # was pandas doing the scanning, not the set.
+    comb_pos = comb.groupby(["face_side", "fid"], sort=False).indices
+    c_fx = comb["follicle_x"].to_numpy(float)
+    c_fy = comb["follicle_y"].to_numpy(float)
+    c_p = comb["_p"].to_numpy(float)
+    c_len = comb["length"].to_numpy(float)
+    c_fid = comb["fid"].to_numpy()
+
+    admitted = []                       # (position in comb, wid)
     for side in kept["face_side"].unique():
-        cs = comb[comb["face_side"] == side]
         for wid, g in kept[kept["face_side"] == side].groupby("wid"):
             g = g.sort_values("fid")
             fol = g.drop_duplicates("fid").set_index("fid")[["follicle_x", "follicle_y"]]
-            present = set(g["fid"].tolist())
-            fmin, fmax = int(g["fid"].iloc[0]), int(g["fid"].iloc[-1])
+            fids = fol.index.to_numpy()
+            fx = fol["follicle_x"].to_numpy(float)
+            fy = fol["follicle_y"].to_numpy(float)
+            if fids.size < 2:
+                continue
             med_len = float(g["length"].median())
-            for f in range(fmin, fmax + 1):
-                if f in present:
+
+            # frames strictly inside the identity's span that it does not occupy
+            span = np.arange(int(fids[0]), int(fids[-1]) + 1)
+            missing = span[~np.isin(span, fids)]
+            if missing.size == 0:
+                continue
+            # bracketing present frames, vectorised
+            k = np.searchsorted(fids, missing)
+            a, b = fids[k - 1], fids[k]
+            t = (missing - a) / (b - a)
+            ex_all = fx[k - 1] * (1 - t) + fx[k] * t
+            ey_all = fy[k - 1] * (1 - t) + fy[k] * t
+
+            for f, ex, ey in zip(missing, ex_all, ey_all):
+                pos = comb_pos.get((side, f))
+                if pos is None:
                     continue
-                # interpolate expected follicle from bracketing present frames
-                lo = fol.index[fol.index < f]
-                hi = fol.index[fol.index > f]
-                if len(lo) == 0 or len(hi) == 0:
+                m = (c_p[pos] >= admit_threshold) & (c_len[pos] >= 0.5 * med_len)
+                if not m.any():
                     continue
-                a, b = lo[-1], hi[0]
-                t = (f - a) / (b - a)
-                ex = fol.loc[a, "follicle_x"] * (1 - t) + fol.loc[b, "follicle_x"] * t
-                ey = fol.loc[a, "follicle_y"] * (1 - t) + fol.loc[b, "follicle_y"] * t
-                cand = cs[(cs["fid"] == f) & (cs["_p"] >= admit_threshold)
-                          & (cs["length"] >= 0.5 * med_len)]
-                if cand.empty:
+                cand = pos[m]
+                d = np.hypot(c_fx[cand] - ex, c_fy[cand] - ey)
+                j = int(d.argmin())
+                if d[j] > gate_px:
                     continue
-                d = np.hypot(cand["follicle_x"] - ex, cand["follicle_y"] - ey)
-                if d.min() > gate_px:
-                    continue
-                row = cand.loc[d.idxmin()].copy()
-                key = (int(row["fid"]), round(row["follicle_x"], 2), round(row["follicle_y"], 2))
+                p = int(cand[j])
+                key = (int(c_fid[p]), round(float(c_fx[p]), 2), round(float(c_fy[p]), 2))
                 if key in used:
                     continue
-                row["label"] = row["wid"]
-                row["wid"] = int(wid)
-                new_rows.append(row.drop(labels="_p"))
+                admitted.append((p, int(wid)))
                 used.add(key)
-    if new_rows:
-        kept = pd.concat([kept, pd.DataFrame(new_rows)], ignore_index=True)
+
+    if admitted:
+        pos = np.fromiter((p for p, _ in admitted), np.int64, len(admitted))
+        wids = np.fromiter((w for _, w in admitted), np.int64, len(admitted))
+        add = comb.iloc[pos].drop(columns="_p").copy()
+        add["label"] = add["wid"].to_numpy()
+        add["wid"] = wids
+        kept = pd.concat([kept, add], ignore_index=True)
     return kept
 
 
