@@ -240,6 +240,8 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             off_x, off_y = med["_dx"], med["_dy"]
 
     n_flag = n_snap = 0
+    flag_idx = []                 # rows whose base is displaced
+    snap_idx, snap_x, snap_y = [], [], []   # reconstructed bases
     for (side, wid), g in out.groupby(["face_side", "wid"]):
         g = g.sort_values("fid")
         fx = g["follicle_x"].to_numpy(float)
@@ -287,10 +289,16 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
         if not np.isfinite(exp_len) or exp_len <= 0:
             continue
 
-        for pos, idx in enumerate(g.index):
-            if not (dev[pos] > thresh):
-                continue
-            out.at[idx, "base_occluded"] = True
+        # Only flagged rows are worth visiting, and the writes are collected rather
+        # than applied one at a time: `out.at[idx, col] = v` is a scalar setitem
+        # against the whole frame, and there are three of them per reconstruction
+        # over a table with millions of rows.
+        pix_x = g["pixels_x"].to_numpy()
+        pix_y = g["pixels_y"].to_numpy()
+        idx_arr = g.index.to_numpy()
+        for pos in np.flatnonzero(dev > thresh):
+            idx = idx_arr[pos]
+            flag_idx.append(idx)
             n_flag += 1
             retained = float(lengths[pos])
             missing = exp_len - retained
@@ -304,8 +312,8 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             # sc012 poke clip before this fix: 196 of 304 reconstructions moved the
             # base FARTHER from where that whisker's base actually sits.
             anchor = (mx[pos], my[pos]) if mx is not None else (ref[0], ref[1])
-            px, py = _oriented(np.asarray(g.at[idx, "pixels_x"], float),
-                               np.asarray(g.at[idx, "pixels_y"], float),
+            px, py = _oriented(np.asarray(pix_x[pos], float),
+                               np.asarray(pix_y[pos], float),
                                anchor[0], anchor[1])
             p = extrapolate_base(px, py, missing)
             if p is None:
@@ -315,9 +323,16 @@ def add_follicle_snap(df: pd.DataFrame, *, window: int = WINDOW,
             if (np.hypot(p[0] - anchor[0], p[1] - anchor[1])
                     > np.hypot(fx[pos] - anchor[0], fy[pos] - anchor[1])):
                 continue
-            out.at[idx, "follicle_snap_x"] = p[0]
-            out.at[idx, "follicle_snap_y"] = p[1]
+            snap_idx.append(idx)
+            snap_x.append(p[0])
+            snap_y.append(p[1])
             n_snap += 1
+
+    if flag_idx:
+        out.loc[flag_idx, "base_occluded"] = True
+    if snap_idx:
+        out.loc[snap_idx, "follicle_snap_x"] = np.asarray(snap_x, float)
+        out.loc[snap_idx, "follicle_snap_y"] = np.asarray(snap_y, float)
 
     if verbose:
         print(f"[follicle_snap] {n_flag} detections with a displaced base, "
