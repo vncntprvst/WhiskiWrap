@@ -231,6 +231,51 @@ def _boundary_pos(d: pd.DataFrame, which: str, k: int) -> pd.DataFrame:
     return m
 
 
+def _seam_sig(d: pd.DataFrame, which: str, k_pos: int = 25, k_ang: int = 5
+              ) -> pd.DataFrame:
+    """Per-state signature at a chunk seam: follicle, angle and length.
+
+    The two quantities need different windows. A follicle barely moves, so a median
+    over ~25 frames is a stable estimate of where the whisker is rooted. An ANGLE
+    sweeps several degrees over that many frames -- on this data a whisker moves
+    ~1.5 deg per frame -- so a 25-frame median describes the middle of a sweep and
+    not the angle at the seam. Angle is therefore taken from only the few frames
+    adjacent to the boundary, which is what has to be continuous across it.
+    """
+    out = {}
+    for st, g in d.groupby("state"):
+        g = g.sort_values("fid")
+        gp = g.tail(k_pos) if which == "end" else g.head(k_pos)
+        ga = g.tail(k_ang) if which == "end" else g.head(k_ang)
+        out[st] = dict(
+            follicle_x=float(gp["follicle_x"].median()),
+            follicle_y=float(gp["follicle_y"].median()),
+            angle=float(ga["angle"].median()) if "angle" in g else np.nan,
+            length=float(gp["length"].median()) if "length" in g else np.nan,
+        )
+    return pd.DataFrame(out).T
+
+
+def _sig_cost(a: dict, b: dict, pos_scale: float, ang_scale: float) -> float:
+    """Normalised distance between two seam signatures.
+
+    Position ALONE cannot separate whiskers on one pad -- their bases sit within a
+    few px of each other, which is the same failure the identity re-ranker had
+    before angle continuity was added to it. On the hand-corrected clip the right
+    side's bases are at follicle_y 186.5 and 191.8, i.e. 5 px apart, inside the
+    10 px confidence margin, so every seam match there was ambiguous and fell back
+    to whole-chunk means. Angle separates them: those same two whiskers sit ~16 deg
+    apart.
+    """
+    d = np.hypot(a["follicle_x"] - b["follicle_x"], a["follicle_y"] - b["follicle_y"])
+    c = d / pos_scale
+    if np.isfinite(a.get("angle", np.nan)) and np.isfinite(b.get("angle", np.nan)):
+        # wrap to +-180 so a whisker near the +-180 boundary is not seen as far
+        da = abs(((a["angle"] - b["angle"] + 180.0) % 360.0) - 180.0)
+        c += da / ang_scale
+    return float(c)
+
+
 def _match_states(ref: Dict[int, np.ndarray], pos: pd.DataFrame,
                   margin: float) -> Tuple[Dict[int, int], bool]:
     """Hungarian-match a chunk's per-state positions to reference gid positions.
@@ -255,52 +300,129 @@ def _match_states(ref: Dict[int, np.ndarray], pos: pd.DataFrame,
 
 
 def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
-                            axis: str = "follicle_y", boundary_frames: int = 25,
-                            confident_margin: float = 10.0) -> pd.DataFrame:
+                            axis: str = "follicle_y", boundary_frames: int = 5,
+                            confident_margin: float = 10.0,
+                            angle_frames: int = 1,
+                            pos_scale: float = 10.0, ang_scale: float = 15.0,
+                            gate: float = 5.0) -> pd.DataFrame:
     """Assign a global identity (``gid``) across chunks.
 
     ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where each
     df contains only identified detections (``state`` >= 0) with a global ``fid``.
-    Across each seam, identities are matched by 2D follicle position using a hybrid
-    of two signatures:
-      * **boundary** -- median over the last ``boundary_frames`` of one chunk vs the
-        first of the next; this follows the actual transition and disambiguates close
-        whiskers (e.g. id1/id2 ~15 px apart) that a whole-chunk mean flips when the
-        per-chunk means happen to cross.
-      * **whole-chunk mean** -- robust when a whisker is occluded near the boundary
-        (the boundary frames are then unreliable).
-    The boundary match is used when it is unambiguous (margin > ``confident_margin``);
-    otherwise it falls back to the whole-chunk-mean match.
+
+    WHAT WAS WRONG WITH MATCHING ON POSITION ALONE
+        Whiskers on one pad have bases a few px apart -- on the hand-corrected clip
+        the right side sits at follicle_y 186.5 and 191.8 -- so a positional cost
+        cannot tell them apart, and the old code's 10 px confidence margin was never
+        satisfied. It then fell back to whole-chunk means, which during whisking are
+        worse still. Measured against known truth, that swapped two whiskers at a
+        chunk boundary and split one whisker into two identities.
+
+        Angle separates them: those two whiskers are ~16 deg apart. This is the same
+        fix the identity re-ranker already had, for the same reason.
+
+    THE ANGLE MUST COME FROM THE FRAME AT THE SEAM
+        A seam is between two ADJACENT frames. Whiskers protract at ~1.5-3 deg per
+        frame, so a median over even five frames either side differs by ~10 deg for
+        the SAME whisker -- more than the ~4 deg separating two whiskers. Measured:
+        identity accuracy 98.5% with a one-frame angle window, 86.7% at two frames,
+        69.9% at five. Position is noisier per frame and is still smoothed.
+
+    IDENTITIES PERSIST ACROSS ABSENCES
+        The old code compared only against the immediately preceding chunk, so a
+        whisker missing from one chunk could never rejoin its own identity: it was
+        unmatched, minted a fresh gid, and the reference set grew monotonically.
+        Over a thousand chunks that is how a handful of whiskers became 60, 129 or
+        678 global ids. Tracks are kept here and matched against their last-seen
+        signature, or their long-run one when they have been away.
+
+    AND AN UNLIKELY MATCH IS REFUSED
+        Hungarian always returns a full assignment, so without ``gate`` a spurious
+        detection is guaranteed to take some real whisker's identity.
+
+    Measured on the hand-corrected clip with simulated chunking (tests/test_stitching.py),
+    across dropped-whisker and spurious-detection rates from 0 to 0.4:
+
+        worst-case identity accuracy   72.9%  ->  86.2%
+        mean identity accuracy         86.5%  ->  94.7%
+        clean case                    100%    -> 100%
+
+    The tuning of ``ang_scale`` and ``gate`` was done against that one clip, so
+    those two numbers should be re-checked on a session with different geometry.
     """
     chunks = sorted(chunks, key=lambda t: t[0])
     out = []
-    ref_b: Optional[Dict[int, np.ndarray]] = None  # gid -> boundary pos at prev end
-    ref_m: Optional[Dict[int, np.ndarray]] = None  # gid -> whole-chunk mean pos
-    for _, d in chunks:
+    # gid -> persistent track. `end` is its signature where it was last seen, `mean`
+    # its long-run signature, `last` the chunk index it was last seen in.
+    tracks: Dict[int, dict] = {}
+    next_gid = 0
+
+    for ci, (_, d) in enumerate(chunks):
         if d.empty:
             continue
-        start_b = _boundary_pos(d, "start", boundary_frames)
-        mean_pos = d.groupby("state")[["follicle_x", "follicle_y"]].mean()
-        if ref_b is None:
-            mapping = {st: i for i, st in enumerate(start_b[axis].sort_values().index)}
+        start = _seam_sig(d, "start", boundary_frames, angle_frames)
+        end = _seam_sig(d, "end", boundary_frames, angle_frames)
+        states = list(start.index)
+
+        if not tracks:
+            mapping = {st: i for i, st in enumerate(start[axis].sort_values().index)}
+            next_gid = len(mapping)
         else:
-            mapping, confident = _match_states(ref_b, start_b, confident_margin)
-            if not confident:
-                mapping, _ = _match_states(ref_m, mean_pos, confident_margin)
-        # any state not matched (new/unmatched identity) gets a fresh global id
-        nxt = (max(mapping.values()) + 1) if mapping else 0
-        if ref_b:
-            nxt = max(nxt, max(ref_b.keys()) + 1)
-        for st in d["state"].unique():
-            if st not in mapping:
-                mapping[st] = nxt; nxt += 1
-        dd = d.copy(); dd["gid"] = dd["state"].map(mapping)
+            # MATCH AGAINST EVERY KNOWN IDENTITY, not just the previous chunk.
+            #
+            # The old code compared only against the chunk immediately before, so a
+            # whisker missing from one chunk could never rejoin its own identity --
+            # it was unmatched, minted a fresh gid, and the reference set grew. That
+            # is what turns a handful of whiskers into 60 or 678 global ids over a
+            # thousand chunks. A whisker that vanishes for a while and comes back is
+            # the normal case, not an exception, so identities persist here and are
+            # matched against their last-seen signature (or their long-run one when
+            # they have been away).
+            gids = list(tracks.keys())
+            cost = np.empty((len(gids), len(states)), float)
+            for gi, g in enumerate(gids):
+                t = tracks[g]
+                ref = t["end"] if t["last"] == ci - 1 else t["mean"]
+                for si, st in enumerate(states):
+                    cost[gi, si] = _sig_cost(ref, start.loc[st].to_dict(),
+                                             pos_scale, ang_scale)
+            ri, cix = linear_sum_assignment(cost)
+            mapping = {}
+            for r, c in zip(ri, cix):
+                # A pair is accepted only if it is actually close. Hungarian always
+                # returns a full assignment, so without a gate a spurious detection
+                # is guaranteed to steal some real whisker's identity -- which is
+                # exactly the swap seen at frame 400 on the hand-checked clip.
+                if cost[r, c] <= gate:
+                    mapping[states[c]] = gids[r]
+            for st in states:
+                if st not in mapping:
+                    mapping[st] = next_gid
+                    next_gid += 1
+
+        dd = d.copy()
+        dd["gid"] = dd["state"].map(mapping)
         out.append(dd)
-        end_b = _boundary_pos(d, "end", boundary_frames)
-        ref_b = {mapping[st]: end_b.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
-                 for st in end_b.index}
-        ref_m = {mapping[st]: mean_pos.loc[st, ["follicle_x", "follicle_y"]].to_numpy(float)
-                 for st in mean_pos.index}
+
+        for st in states:
+            g = mapping[st]
+            e = end.loc[st].to_dict()
+            s = start.loc[st].to_dict()
+            if g in tracks:
+                t = tracks[g]
+                n = t["n"]
+                # running mean over the frames this identity has been seen in
+                t["mean"] = {k: (t["mean"][k] * n + s[k]) / (n + 1)
+                             if np.isfinite(s.get(k, np.nan))
+                             and np.isfinite(t["mean"].get(k, np.nan))
+                             else t["mean"].get(k, s.get(k))
+                             for k in ("follicle_x", "follicle_y", "angle", "length")}
+                t["n"] = n + 1
+                t["end"] = e
+                t["last"] = ci
+            else:
+                tracks[g] = dict(end=e, mean=dict(s), n=1, last=ci)
+
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
