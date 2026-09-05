@@ -21,6 +21,7 @@ import glob
 import os
 import re
 import subprocess
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
@@ -845,6 +846,25 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
     no identities were produced. Exposed so the autotune loop can cache this expensive step
     once and apply learned add-ons offline."""
     combined = pd.read_parquet(combined_parquet)
+
+    # Compute the shape descriptors ONCE, here, and let them travel.
+    #
+    # Everything downstream is derived from these rows -- apply_hmm_identity returns
+    # `combined.iloc[...]`, bridge_gaps adopts more of the same rows, follicle_snap
+    # copies -- so columns added now are present at every later stage. Without this
+    # the coverage model, the identity bootstrap and the identity re-ranker each
+    # rebuild them from scratch at ~38 us per row, which is most of the link.
+    try:
+        from . import detection_features as _dF
+        if not all(c in combined.columns for c in _dF._SHAPE_SCALAR_COLS):
+            _t0 = _time.time()
+            combined = _dF.add_shape_features(combined, include_vec=False)
+            _stage(f"shape features for {len(combined)} detections "
+                   f"({_time.time() - _t0:.1f}s, computed once for the whole link)")
+    except Exception as exc:                                  # noqa: BLE001
+        # Not fatal: every consumer still computes them itself if they are absent.
+        _stage(f"could not precompute shape features ({exc}); each stage will "
+               f"recompute them")
 
     # Honour whisk's own classification. `label` carries what classify/reclassify
     # decided: -1 for "traced, but not a whisker" (fur, stubs, noise), 0,1,2... for

@@ -121,6 +121,77 @@ def rerank_identity(out: pd.DataFrame, bundle: Dict, *, side_faces=None,
         if s.empty:
             continue
         probs = clf.predict_proba(_feat(s, k))            # [n, C] aligned to s
+
+        # ---- fast path: no association model -------------------------------
+        # Same algorithm, without pandas in the inner loops. The original read
+        # `res.at[idx, col]` for every detection in every frame and wrote
+        # `res.at[idx, "wid"] = c` for every assignment -- scalar accessors against
+        # a multi-million-row frame -- and looped over identities in Python to fill
+        # one cost matrix cell at a time. On a 123k-frame session this stage took
+        # 960 s of a 1422 s link.
+        #
+        # Deferring the writes is exact: each row belongs to exactly one frame and
+        # is assigned in that frame, while `cur` is read from rows of the frame
+        # being processed, which have not been written yet. So no iteration can
+        # observe a write made by another.
+        #
+        # The association path below is left as it was: it is opt-in via
+        # WW_ASSOC_MODEL, its features are built per (detection, identity) pair,
+        # and rewriting an unused path is how a working one gets broken.
+        if assoc_bundle is None:
+            classes_arr = np.asarray(classes)
+            nC = len(classes)
+            fol_all = s[["follicle_x", "follicle_y"]].to_numpy(float)
+            wid_all = s["wid"].to_numpy()
+            has_angle_f = "angle" in s.columns
+            ang_all = s["angle"].to_numpy(float) if has_angle_f else None
+            groups = s.groupby("fid", sort=True).indices     # positional into s
+
+            last_f = np.full((nC, 2), np.nan)
+            last_a = np.full(nC, np.nan)
+            # "has been assigned at least once" is tracked separately from the
+            # stored value. The original used None for this, which stays set even
+            # when the value stored is NaN; a NaN sentinel would silently revert an
+            # identity to unseen the first time it was assigned a NaN angle.
+            seen_f = np.zeros(nC, bool)
+            seen_a = np.zeros(nC, bool)
+            take_pos, take_wid = [], []
+            for fid in sorted(groups):
+                pos = groups[fid]
+                F = fol_all[pos]
+                cur = wid_all[pos]
+                prior = (cur[:, None] != classes_arr[None, :]).astype(float)
+                model = 1.0 - probs[pos]                     # columns are `classes`
+                # The gate is "has this identity been seen yet", not "is the value
+                # NaN". They differ when a detection's own angle is NaN, where the
+                # original propagates the NaN into the cost rather than zeroing it.
+                d = np.hypot(F[:, None, 0] - last_f[None, :, 0],
+                             F[:, None, 1] - last_f[None, :, 1])
+                cont = np.where(seen_f[None, :],
+                                np.minimum(d / cont_scale, 2.0), 0.0)
+                if has_angle_f:
+                    da = np.abs(ang_all[pos][:, None] - last_a[None, :])
+                    acont = np.where(seen_a[None, :],
+                                     np.minimum(da / angle_scale, 2.0), 0.0)
+                else:
+                    acont = 0.0
+                C = (w_prior * prior + w_model * model
+                     + w_cont * cont + w_angle * acont)
+                ri, ci = linear_sum_assignment(C)
+                take_pos.append(pos[ri])
+                take_wid.append(classes_arr[ci])
+                last_f[ci] = F[ri]
+                seen_f[ci] = True
+                if has_angle_f:
+                    last_a[ci] = ang_all[pos][ri]
+                    seen_a[ci] = True
+
+            if take_pos:
+                p = np.concatenate(take_pos)
+                w = np.concatenate(take_wid)
+                res.loc[s.index.to_numpy()[p], "wid"] = w
+            continue
+
         prob_by_idx = {idx: probs[i] for i, idx in enumerate(s.index)}
         cls_pos = {c: j for j, c in enumerate(classes)}
         last_fol: Dict[int, Optional[np.ndarray]] = {c: None for c in classes}

@@ -111,9 +111,27 @@ def skeleton_descriptor(px, py, fx: float, fy: float, k: int = 16):
     return rot.reshape(-1), scalars
 
 
+# every scalar skeleton_descriptor returns, including the two SHAPE_SCALARS omits
+_SHAPE_SCALAR_COLS = SHAPE_SCALARS + ["base_angle"]
+
+
 def add_shape_features(df: pd.DataFrame, k: int = 16,
                        include_vec: bool = False) -> pd.DataFrame:
-    """Add shape scalar columns (and optionally the 2k shape vector) to ``df``."""
+    """Add shape scalar columns (and optionally the 2k shape vector) to ``df``.
+
+    REUSES the columns if they are already on the frame. The descriptor is a pure
+    function of a row's pixels_x/pixels_y and follicle, none of which the pipeline
+    changes, so recomputing it is waste -- and it is not cheap: ~38 us per row,
+    which is 8 minutes per 12M-row pass. A single --learned link made three or four
+    such passes (coverage keep, coverage admit, identity bootstrap training, and
+    the identity re-ranker), each throwing the result away.
+
+    Computing them once onto the combined table and letting them travel makes the
+    later passes free. `include_vec` still recomputes, because the 2k vector is not
+    carried on the frame.
+    """
+    if not include_vec and all(c in df.columns for c in _SHAPE_SCALAR_COLS):
+        return df.copy()
     out = df.copy()
     rows = [skeleton_descriptor(r.pixels_x, r.pixels_y, r.follicle_x, r.follicle_y, k)
             for r in df.itertuples(index=False)]
