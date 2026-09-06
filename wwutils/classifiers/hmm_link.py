@@ -959,13 +959,47 @@ def bridge_gaps(out: pd.DataFrame, combined: pd.DataFrame, *, max_gap: int = 20,
     return out
 
 
+def _labels_look_like_identities(combined, frac: float = 0.6) -> bool:
+    """Was classify run with a real ``-n N``, or in automatic per-segment mode?
+
+    In automatic mode (``-n -1``, which is what the tracing pipeline passes) classify
+    gives nearly every segment its own label, so the number of DISTINCT labels in a
+    frame approaches the number of detections in it. With a real N it is about N.
+
+    Measured on the ground-truth clips, whose combined parquets come from automatic
+    mode: 18-19 distinct labels per frame against ~18 detections per frame, i.e. a
+    ratio near 1. A genuine 3-whisker labelling would sit near 3/18.
+    """
+    if "label" not in combined.columns or "face_side" not in combined.columns:
+        return False
+    for _, g in combined.groupby("face_side"):
+        lab = g[g["label"] >= 0]
+        if lab.empty:
+            continue
+        per_frame_labels = lab.groupby("fid")["label"].nunique().median()
+        per_frame_dets = g.groupby("fid").size().median()
+        if per_frame_dets and per_frame_labels >= frac * per_frame_dets:
+            return False
+    return True
+
+
 def _n_from_classify_labels(combined, min_frame_frac: float = 0.5) -> Dict[str, int]:
     """Whiskers per side, taken from the identities classify assigned.
 
-    classify labels each segment -1 (not a whisker) or 0,1,2... (whisker n), and
-    the number of distinct non-negative labels on a side IS its whisker count --
-    already decided using the length and follicle tests it was configured with.
-    Deriving it again from length statistics throws that away and does worse.
+    classify labels each segment -1 (not a whisker) or 0,1,2... (whisker n), so
+    max(label)+1 is its answer -- BUT ONLY IF IT WAS GIVEN A REAL ``-n N``.
+
+    The tracing pipeline passes `num_whiskers = -1` (automatic), and in that mode
+    classify gives nearly every segment its own label. max(label)+1 then counts
+    segments: against hand-edited ground truth where the answer is 3 whiskers per
+    side, this returns 28-37, and on real sessions 9-13. Callers must therefore
+    check `_labels_look_like_identities` first; `hmm_backbone` does.
+
+    The consequences of not checking are severe and were both observed: a moderate
+    overcount (n=12) lets classify succeed but makes 9 of 12 identities fur, which
+    is where 678 global identities came from; a large one (n=28) makes classify
+    return no identities at all, so HMM linking silently produces nothing and the
+    pipeline falls back to the geometry linker without saying so.
 
     classify numbers its whiskers 0..N-1, so N = max(label) + 1 is its answer --
     not the number of labels that happen to be common. A whisker that is occluded
@@ -1089,11 +1123,37 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
         # this clip, 3 per side in every frame. estimate_n_per_side() re-derives a
         # count from per-label length statistics instead, which is strictly less
         # informed: run on the same data it returns 2, dropping a real whisker.
-        n_per_side = _n_from_classify_labels(combined)
-        if n_per_side:
-            _stage(f"whisker count from classify labels: {n_per_side}")
-        else:
-            n_per_side = estimate_n_per_side(combined)
+        # WHICH ESTIMATE TO TRUST, AND WHY IT IS NO LONGER THE LABELS
+        #
+        # `_n_from_classify_labels` reads max(label)+1, on the premise that classify
+        # already decided the whisker count using its own length and follicle tests.
+        # That premise requires classify to have been given a real `-n N`. The
+        # tracing pipeline passes `num_whiskers = -1` (automatic), and in that mode
+        # classify labels essentially EVERY segment separately -- so max(label)+1
+        # counts segments, not whiskers.
+        #
+        # Measured against the two hand-edited ground-truth clips, where the answer
+        # is 3 whiskers per side in all four cases:
+        #
+        #     estimate_n_per_side       {left: 3,  right: 3}   {left: 3,  right: 3}
+        #     _n_from_classify_labels   {left: 36, right: 37}  {left: 28, right: 27}
+        #
+        # Those inflated counts are the origin of the 60/129/678 global identities
+        # seen on real sessions: forcing classify to find 12 whiskers on a 3-whisker
+        # side makes 9 of them fur, and stitching then has 9 spurious states per
+        # chunk to contend with.
+        #
+        # The labels are still used when they look like real identities. The tell is
+        # that automatic mode gives nearly as many distinct labels per FRAME as
+        # there are detections in it, whereas a genuine `-n N` run gives about N.
+        n_lab = _n_from_classify_labels(combined)
+        n_per_side = estimate_n_per_side(combined)
+        if n_lab and _labels_look_like_identities(combined):
+            _stage(f"whisker count from classify labels: {n_lab}")
+            n_per_side = n_lab
+        elif n_lab:
+            _stage(f"classify labels look per-segment, not per-whisker "
+                   f"({n_lab}); using the length-based estimate {n_per_side} instead")
     offsets = _side_offsets(whiskerpad) if whiskerpad is not None else {}
     _stage(f"whiskers per side: {n_per_side}")
     hmm_parts = []
