@@ -321,7 +321,7 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
                             confident_margin: float = 10.0,
                             angle_frames: int = 1,
                             pos_scale: float = 10.0, ang_scale: float = 15.0,
-                            gate: float = 5.0) -> pd.DataFrame:
+                            gate: float = float("inf")) -> pd.DataFrame:
     """Assign a global identity (``gid``) across chunks.
 
     ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where each
@@ -353,19 +353,35 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
         678 global ids. Tracks are kept here and matched against their last-seen
         signature, or their long-run one when they have been away.
 
-    AND AN UNLIKELY MATCH IS REFUSED
-        Hungarian always returns a full assignment, so without ``gate`` a spurious
-        detection is guaranteed to take some real whisker's identity.
+    ``gate`` IS OFF BY DEFAULT, AND THAT WAS MEASURED
+        Hungarian always returns a full assignment, so a distance gate looks like
+        the right way to stop a spurious detection taking a real whisker's
+        identity. Tuned on an 840-frame clip -- FOUR seams -- a gate of 5.0 looked
+        best. On a real 3787-seam session it was a disaster: it rejected legitimate
+        matches deep in the cost distribution's tail and split 3 whiskers into 17
+        identities, where the ungated version returns exactly 3.
 
-    Measured on the hand-corrected clip with simulated chunking (tests/test_stitching.py),
-    across dropped-whisker and spurious-detection rates from 0 to 0.4:
+        Measured on sc014_0324_001 right side, 3787 chunks:
 
-        worst-case identity accuracy   72.9%  ->  86.2%
-        mean identity accuracy         86.5%  ->  94.7%
-        clean case                    100%    -> 100%
+            n=3 (the animal's real count)      n=12 (what the pipeline estimates)
+            old            3 ids, 100%         old           200 ids, top 35%
+            gate=5        17 ids, top 54%      gate=5         99 ids, top 59%
+            gate=20        3 ids, 100%         gate=20        21 ids, top 81%
+            gate=off       3 ids, 100%         gate=off       12 ids, top 93%
 
-    The tuning of ``ang_scale`` and ``gate`` was done against that one clip, so
-    those two numbers should be re-checked on a session with different geometry.
+        So it stays as a parameter and defaults to off. A constant tuned on four
+        samples has no business gating three thousand.
+
+    Measured two ways. On the hand-corrected clip with simulated chunking
+    (tests/test_stitching.py), across dropped-whisker and spurious-detection rates
+    from 0 to 0.4: worst-case identity accuracy 72.9% -> 88.6%, mean 86.5% -> 96.6%,
+    clean 100% both. And on a real 3787-chunk session (above), where the persistent
+    tracks are what matter: 200 identities -> 12, none persistent -> all at 93%.
+
+    NOTE the 12 is `n`, not the animal's whisker count. This side has ~3 whiskers;
+    the pipeline asked classify for 12, so 9 of those identities are fur tracked
+    consistently. Stitching is then doing its job correctly on wrong input -- the
+    count estimate is a separate defect, upstream of here.
     """
     chunks = sorted(chunks, key=lambda t: t[0])
     out = []
