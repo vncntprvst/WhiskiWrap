@@ -1165,14 +1165,36 @@ def hmm_backbone(combined_parquet, wt_dir, base_name, side_faces, *,
         # The labels are still used when they look like real identities. The tell is
         # that automatic mode gives nearly as many distinct labels per FRAME as
         # there are detections in it, whereas a genuine `-n N` run gives about N.
-        n_lab = _n_from_classify_labels(combined)
+        # THE LENGTH-BASED ESTIMATE IS PRIMARY. The labels are a cross-check.
+        #
+        # `_n_from_classify_labels` reads max(label)+1. Two things break that, and
+        # both were measured rather than argued:
+        #
+        #   * tracing runs classify with `-n -1`, which in automatic mode gives
+        #     nearly every segment its own label. On the hand-edited GT clips that
+        #     yields 28-37 "whiskers" per side against a true 3.
+        #   * even where the labels ARE per-whisker, max() takes the largest label
+        #     ever emitted. On sc013_0213_001 the typical frame holds 3 labels per
+        #     side -- the right answer -- while stray labels appearing in 0-20% of
+        #     frames push max(label)+1 to 6 and 8.
+        #
+        # Against every case with ground truth, estimate_n_per_side is correct:
+        #
+        #     clip            truth   estimate_n_per_side   _n_from_classify_labels
+        #     sc013_active    3, 3    3, 3                  36, 37
+        #     seg04           3, 3    3, 3                  28, 27
+        #     excerpt         3, 3    3, 3                  2, 21
+        #     sc013_0213_001  (3, 3)  3, 3                  6, 8
+        #
+        # so it is used, and the label count is reported only when it disagrees --
+        # a disagreement is worth seeing, not worth acting on. Pass `n_per_side`
+        # (whisker_tracking.py --n-whiskers) when the count is known.
         n_per_side = estimate_n_per_side(combined)
-        if n_lab and _labels_look_like_identities(combined):
-            _stage(f"whisker count from classify labels: {n_lab}")
-            n_per_side = n_lab
-        elif n_lab:
-            _stage(f"classify labels look per-segment, not per-whisker "
-                   f"({n_lab}); using the length-based estimate {n_per_side} instead")
+        n_lab = _n_from_classify_labels(combined)
+        if n_lab and n_lab != n_per_side:
+            _stage(f"whisker count {n_per_side} (length-based); classify labels "
+                   f"would have said {n_lab} -- not used, see the note in "
+                   f"hmm_backbone")
     offsets = _side_offsets(whiskerpad) if whiskerpad is not None else {}
     _stage(f"whiskers per side: {n_per_side}")
     hmm_parts = []
