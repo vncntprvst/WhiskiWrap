@@ -321,7 +321,8 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
                             confident_margin: float = 10.0,
                             angle_frames: int = 1,
                             pos_scale: float = 10.0, ang_scale: float = 15.0,
-                            gate: float = float("inf")) -> pd.DataFrame:
+                            gate: float = float("inf"),
+                            track_weight: float = 1.0) -> pd.DataFrame:
     """Assign a global identity (``gid``) across chunks.
 
     ``chunks`` is a list of ``(chunk_start, df)`` ordered by chunk_start, where each
@@ -416,11 +417,29 @@ def stitch_chunk_identities(chunks: List[Tuple[int, pd.DataFrame]], *,
             for gi, g in enumerate(gids):
                 t = tracks[g]
                 adjacent = (t["last"] == ci - 1)
-                ref = t["end"] if adjacent else t["mean"]
                 for si, st in enumerate(states):
-                    cost[gi, si] = _sig_cost(ref, start.loc[st].to_dict(),
-                                             pos_scale, ang_scale,
-                                             use_angle=adjacent)
+                    cand = start.loc[st].to_dict()
+                    # SEAM CONTINUITY *AND* LONG-RUN IDENTITY.
+                    #
+                    # The seam alone is not always enough, and the failure is not
+                    # rare. On sc013_active right at frame 2999/3000 the two
+                    # whiskers are ~10 px apart while one base wanders 12 px across
+                    # the seam, so the WRONG pairing is 1.0 px and the right one is
+                    # 12.8 px; their angles differ by 4.8 vs 5.1 deg, so angle
+                    # cannot break the tie either. Both whiskers swapped.
+                    #
+                    # Their long-run positions are unambiguous -- track means 214.5
+                    # and 224.4 against a candidate at 213.7 -- because a base
+                    # wanders frame to frame but a whisker's root does not move.
+                    # So the cost is the seam term plus the distance to the track's
+                    # running signature, which is stable exactly where the seam is
+                    # noisy. Angle is excluded from the long-run term for the same
+                    # reason it is dropped across a gap: it sweeps.
+                    c = _sig_cost(t["end"] if adjacent else t["mean"], cand,
+                                  pos_scale, ang_scale, use_angle=adjacent)
+                    c_track = _sig_cost(t["mean"], cand, pos_scale, ang_scale,
+                                        use_angle=False)
+                    cost[gi, si] = (c + track_weight * c_track) / (1.0 + track_weight)
             ri, cix = linear_sum_assignment(cost)
             mapping = {}
             for r, c in zip(ri, cix):
